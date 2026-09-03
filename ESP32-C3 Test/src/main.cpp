@@ -2,6 +2,9 @@
 
 #define LEDPIN 8
 
+// declaring methods
+void blinkSequence(const char* sequence);
+
 // Morse code timing standards (based on 1 unit = 150 ms)
 const int UNIT_LENGTH   = 150;
 const int DOT_DURATION   = UNIT_LENGTH;
