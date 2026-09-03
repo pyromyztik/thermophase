@@ -180,9 +180,31 @@ class TAAUUpscaler:
 UPSCALER_MODES = [
     "TAAU (Temporal Super-Res)",
     "Edge-Preserving (Bilateral)",
-    "Lanczos-4 (Sharp Standard)",
-    "Bicubic (Smooth Standard)"
+    "Lanczos-4 (Sharp)",
+    "Bicubic (Smooth)",
+    "Bilinear (Linear)",
+    "None (Nearest Neighbor / Raw Pixels)"
 ]
+
+# ==============================================================================
+# Text Rendering with Drop Shadow
+# ==============================================================================
+def draw_text_with_shadow(
+    img: np.ndarray,
+    text: str,
+    pos: tuple[int, int],
+    font: int = cv2.FONT_HERSHEY_SIMPLEX,
+    scale: float = 0.5,
+    color: tuple[int, int, int] = (255, 255, 255),
+    thickness: int = 1,
+    shadow_color: tuple[int, int, int] = (0, 0, 0),
+    shadow_offset: tuple[int, int] = (1, 1),
+) -> None:
+    """Renders text with a subtle 1px drop shadow for crisp readability."""
+    x, y = pos
+    dx, dy = shadow_offset
+    cv2.putText(img, text, (x + dx, y + dy), font, scale, shadow_color, thickness, cv2.LINE_AA)
+    cv2.putText(img, text, (x, y), font, scale, color, thickness, cv2.LINE_AA)
 
 # ==============================================================================
 # Color Bar Component
@@ -211,10 +233,10 @@ def create_color_bar(width: int, t_min: float, t_max: float, height: int = 50) -
     color = (255, 255, 255)
     text_y = bar_y + bar_h + 18
 
-    cv2.putText(bar_img, f"{t_min:.1f}C", (pad_x, text_y), font, scale, color, 1, cv2.LINE_AA)
+    draw_text_with_shadow(bar_img, f"{t_min:.1f}C", (pad_x, text_y), font=font, scale=scale, color=color)
     mid_t = (t_min + t_max) / 2.0
-    cv2.putText(bar_img, f"{mid_t:.1f}C", (width // 2 - 20, text_y), font, scale, color, 1, cv2.LINE_AA)
-    cv2.putText(bar_img, f"{t_max:.1f}C", (width - pad_x - 48, text_y), font, scale, color, 1, cv2.LINE_AA)
+    draw_text_with_shadow(bar_img, f"{mid_t:.1f}C", (width // 2 - 20, text_y), font=font, scale=scale, color=color)
+    draw_text_with_shadow(bar_img, f"{t_max:.1f}C", (width - pad_x - 48, text_y), font=font, scale=scale, color=color)
 
     return bar_img
 
@@ -228,7 +250,7 @@ def main():
     print(f"Scale: {RAW_WIDTH}x{RAW_HEIGHT} -> {TARGET_WIDTH}x{TARGET_HEIGHT} (20x)")
     print(f"Fixed Range: {T_MIN:.1f}C to {T_MAX:.1f}C")
     print("Controls:")
-    print("  [u] Cycle Upscaler Mode (TAAU, Edge-Preserving, Lanczos, Bicubic)")
+    print("  [u] Cycle Scaling Mode (TAAU, Bilateral, Lanczos, Bicubic, Bilinear, None)")
     print("  [v] Toggle Vertical Flip")
     print("  [d] Toggle De-checkerboard Filter")
     print("  [s] Toggle Spatial Denoise (Gaussian)")
@@ -251,106 +273,151 @@ def main():
     taau = TAAUUpscaler(TARGET_WIDTH, TARGET_HEIGHT, alpha=0.80)
 
     color_bar = create_color_bar(TARGET_WIDTH, T_MIN, T_MAX)
-    cv2.namedWindow("MLX90640 Thermal Stream", cv2.WINDOW_AUTOSIZE)
+    window_name = "MLX90640 Thermal Stream"
+    cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+
+    hover_pos = None
+    mouse_moved = False
+
+    def on_mouse(event, x, y, flags, param):
+        nonlocal hover_pos, mouse_moved
+        if event == cv2.EVENT_MOUSEMOVE:
+            hover_pos = (x, y)
+            mouse_moved = True
+
+    cv2.setMouseCallback(window_name, on_mouse)
 
     prev_frame = None
     fps_ema = 0.0
     last_frame_time = time.perf_counter()
 
+    base_thermal_view = None
+    latest_upscaled = None
+    hotspot_pos = (0, 0)
+    hotspot_temp = 0.0
+
     try:
         while True:
             raw_frame = reader.get_latest_frame()
-            if raw_frame is None:
-                key = cv2.waitKey(2) & 0xFF
-                if key in (ord('q'), 27):
-                    break
-                elif key == ord('u'):
-                    upscaler_idx = (upscaler_idx + 1) % len(UPSCALER_MODES)
-                    taau.reset()
-                elif key == ord('v'):
-                    flip_v = not flip_v
-                    taau.reset()
-                continue
+            new_data = (raw_frame is not None)
 
-            # Real-time smoothed FPS
-            now = time.perf_counter()
-            dt = now - last_frame_time
-            last_frame_time = now
-            if dt > 0:
-                inst_fps = 1.0 / dt
-                fps_ema = inst_fps if fps_ema == 0.0 else (0.85 * fps_ema + 0.15 * inst_fps)
+            if new_data:
+                # Real-time smoothed FPS
+                now = time.perf_counter()
+                dt = now - last_frame_time
+                last_frame_time = now
+                if dt > 0:
+                    inst_fps = 1.0 / dt
+                    fps_ema = inst_fps if fps_ema == 0.0 else (0.85 * fps_ema + 0.15 * inst_fps)
 
-            # --- Denoising & De-checkerboarding ---
-            proc_frame = raw_frame
-            if dechecker_enabled:
-                proc_frame = remove_checkerboard_artifact(proc_frame)
+                # --- Denoising & De-checkerboarding ---
+                proc_frame = raw_frame
+                if dechecker_enabled:
+                    proc_frame = remove_checkerboard_artifact(proc_frame)
 
-            if spatial_blur_enabled:
-                proc_frame = cv2.GaussianBlur(proc_frame, (3, 3), 0.5)
+                if spatial_blur_enabled:
+                    proc_frame = cv2.GaussianBlur(proc_frame, (3, 3), 0.5)
 
-            # Flip if needed (upside-down fix)
-            if flip_v:
-                proc_frame = cv2.flip(proc_frame, 0)
+                # Flip if needed (upside-down fix)
+                if flip_v:
+                    proc_frame = cv2.flip(proc_frame, 0)
 
-            # --- Advanced Super-Resolution & Upscaling ---
-            if upscaler_idx == 0:
-                # Mode 0: TAAU (Temporal Anti-Aliasing Upsampling + Anti-Ghosting + CAS)
-                upscaled = taau.process(proc_frame)
-            elif upscaler_idx == 1:
-                # Mode 1: Edge-Preserving Bilateral Super-Resolution
-                base = cv2.resize(proc_frame, (TARGET_WIDTH, TARGET_HEIGHT), interpolation=cv2.INTER_CUBIC)
-                smooth = cv2.bilateralFilter(base, d=5, sigmaColor=1.5, sigmaSpace=5.0)
-                detail = base - cv2.GaussianBlur(base, (0, 0), 2.0)
-                upscaled = smooth + 1.4 * detail
-            elif upscaler_idx == 2:
-                # Mode 2: Lanczos-4 Sharp
-                upscaled = cv2.resize(proc_frame, (TARGET_WIDTH, TARGET_HEIGHT), interpolation=cv2.INTER_LANCZOS4)
-            else:
-                # Mode 3: Bicubic Smooth
-                upscaled = cv2.resize(proc_frame, (TARGET_WIDTH, TARGET_HEIGHT), interpolation=cv2.INTER_CUBIC)
+                # --- Advanced Super-Resolution & Upscaling ---
+                if upscaler_idx == 0:
+                    # Mode 0: TAAU (Temporal Anti-Aliasing Upsampling + Anti-Ghosting + CAS)
+                    upscaled = taau.process(proc_frame)
+                elif upscaler_idx == 1:
+                    # Mode 1: Edge-Preserving Bilateral Super-Resolution
+                    base = cv2.resize(proc_frame, (TARGET_WIDTH, TARGET_HEIGHT), interpolation=cv2.INTER_CUBIC)
+                    smooth = cv2.bilateralFilter(base, d=5, sigmaColor=1.5, sigmaSpace=5.0)
+                    detail = base - cv2.GaussianBlur(base, (0, 0), 2.0)
+                    upscaled = smooth + 1.4 * detail
+                elif upscaler_idx == 2:
+                    # Mode 2: Lanczos-4 Sharp
+                    upscaled = cv2.resize(proc_frame, (TARGET_WIDTH, TARGET_HEIGHT), interpolation=cv2.INTER_LANCZOS4)
+                elif upscaler_idx == 3:
+                    # Mode 3: Bicubic Smooth
+                    upscaled = cv2.resize(proc_frame, (TARGET_WIDTH, TARGET_HEIGHT), interpolation=cv2.INTER_CUBIC)
+                elif upscaler_idx == 4:
+                    # Mode 4: Bilinear Standard
+                    upscaled = cv2.resize(proc_frame, (TARGET_WIDTH, TARGET_HEIGHT), interpolation=cv2.INTER_LINEAR)
+                else:
+                    # Mode 5: None / Nearest Neighbor (unfiltered raw sensor grid)
+                    upscaled = cv2.resize(proc_frame, (TARGET_WIDTH, TARGET_HEIGHT), interpolation=cv2.INTER_NEAREST)
 
-            # Safe normalization (immune to NaNs or zero-division)
-            diff = max(T_MAX - T_MIN, 1.0)
-            norm = np.clip((upscaled - T_MIN) / diff * 255.0, 0.0, 255.0)
-            normalized = np.nan_to_num(norm, nan=0.0).astype(np.uint8)
+                # Safe normalization (immune to NaNs or zero-division)
+                diff = max(T_MAX - T_MIN, 1.0)
+                norm = np.clip((upscaled - T_MIN) / diff * 255.0, 0.0, 255.0)
+                normalized = np.nan_to_num(norm, nan=0.0).astype(np.uint8)
 
-            # False-color thermal mapping
-            color_mapped = cv2.applyColorMap(normalized, cv2.COLORMAP_INFERNO)
+                # False-color thermal mapping
+                color_mapped = cv2.applyColorMap(normalized, cv2.COLORMAP_INFERNO)
 
-            # --- Hotspot Tracking ---
-            max_idx = np.argmax(upscaled)
-            max_y, max_x = np.unravel_index(max_idx, upscaled.shape)
-            hotspot_temp = float(upscaled[max_y, max_x])
+                # --- Hotspot Tracking ---
+                max_idx = np.argmax(upscaled)
+                max_y, max_x = np.unravel_index(max_idx, upscaled.shape)
+                hotspot_pos = (max_x, max_y)
+                hotspot_temp = float(upscaled[max_y, max_x])
 
-            # Draw hotspot marker
-            cv2.drawMarker(color_mapped, (max_x, max_y), (0, 0, 255), cv2.MARKER_CROSS, 16, 2, cv2.LINE_AA)
-            cv2.circle(color_mapped, (max_x, max_y), 6, (0, 0, 255), 1, cv2.LINE_AA)
+                # Draw hotspot marker
+                cv2.drawMarker(color_mapped, (max_x, max_y), (0, 0, 255), cv2.MARKER_CROSS, 16, 2, cv2.LINE_AA)
+                cv2.circle(color_mapped, (max_x, max_y), 6, (0, 0, 255), 1, cv2.LINE_AA)
 
-            # Hotspot label with boundary clamp
-            label = f"HOT: {hotspot_temp:.1f}C"
-            lbl_x = min(max_x + 10, TARGET_WIDTH - 110)
-            lbl_y = max(max_y - 10, 24)
+                # Hotspot label with boundary clamp & drop shadow
+                label = f"HOT: {hotspot_temp:.1f}C"
+                lbl_x = min(max_x + 10, TARGET_WIDTH - 110)
+                lbl_y = max(max_y - 10, 24)
+                draw_text_with_shadow(color_mapped, label, (lbl_x, lbl_y), scale=0.5, color=(0, 255, 255))
 
-            # High-contrast label (black outline + yellow text)
-            cv2.putText(color_mapped, label, (lbl_x, lbl_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2, cv2.LINE_AA)
-            cv2.putText(color_mapped, label, (lbl_x, lbl_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
+                base_thermal_view = color_mapped
+                latest_upscaled = upscaled
 
-            # HUD Overlays (FPS & Upscaler Mode)
-            mode_str = UPSCALER_MODES[upscaler_idx]
-            cv2.putText(color_mapped, f"FPS: {fps_ema:.1f}", (12, 28),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
-            cv2.putText(color_mapped, f"FPS: {fps_ema:.1f}", (12, 28),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+            # Render display if new thermal frame arrived or mouse moved
+            if (new_data or mouse_moved) and base_thermal_view is not None:
+                mouse_moved = False
+                view = base_thermal_view.copy()
 
-            cv2.putText(color_mapped, f"[U] {mode_str}", (12, 54),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2, cv2.LINE_AA)
-            cv2.putText(color_mapped, f"[U] {mode_str}", (12, 54),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
+                # HUD Overlays (FPS & Upscaler Mode) with drop shadow
+                mode_str = UPSCALER_MODES[upscaler_idx]
+                draw_text_with_shadow(view, f"FPS: {fps_ema:.1f}", (12, 28), scale=0.6, color=(255, 255, 255))
+                draw_text_with_shadow(view, f"[U] {mode_str}", (12, 52), scale=0.5, color=(0, 255, 255))
 
-            # Stack thermal viewport and temperature color bar
-            display_frame = np.vstack([color_mapped, color_bar])
+                # Hover Inspector: show temperature of hovered pixel
+                if hover_pos is not None and latest_upscaled is not None:
+                    hx, hy = hover_pos
+                    if 0 <= hx < TARGET_WIDTH and 0 <= hy < TARGET_HEIGHT:
+                        hover_temp = float(latest_upscaled[hy, hx])
 
-            cv2.imshow("MLX90640 Thermal Stream", display_frame)
+                        # Precision reticle with drop shadow
+                        cv2.drawMarker(view, (hx + 1, hy + 1), (0, 0, 0), cv2.MARKER_CROSS, 12, 1, cv2.LINE_AA)
+                        cv2.drawMarker(view, (hx, hy), (255, 255, 255), cv2.MARKER_CROSS, 12, 1, cv2.LINE_AA)
+                        cv2.circle(view, (hx + 1, hy + 1), 3, (0, 0, 0), 1, cv2.LINE_AA)
+                        cv2.circle(view, (hx, hy), 3, (255, 255, 255), 1, cv2.LINE_AA)
+
+                        # Floating tooltip label
+                        tip_text = f"{hover_temp:.1f}C"
+                        (tw, th), _ = cv2.getTextSize(tip_text, cv2.FONT_HERSHEY_SIMPLEX, 0.48, 1)
+                        tip_x = hx + 10
+                        tip_y = hy - 6
+                        if tip_x + tw > TARGET_WIDTH - 6:
+                            tip_x = hx - tw - 10
+                        if tip_y - th < 6:
+                            tip_y = hy + th + 12
+                        if abs(hx - hotspot_pos[0]) < 30 and abs(hy - hotspot_pos[1]) < 25:
+                            tip_y = hy + th + 14
+
+                        draw_text_with_shadow(view, tip_text, (tip_x, tip_y), scale=0.48, color=(255, 255, 255))
+                        draw_text_with_shadow(view, f"Cursor: {hover_temp:.1f}C", (12, 74), scale=0.5, color=(255, 255, 255))
+
+                    elif 0 <= hx < TARGET_WIDTH and TARGET_HEIGHT <= hy < TARGET_HEIGHT + color_bar.shape[0]:
+                        pad_x = 24
+                        bar_w = TARGET_WIDTH - 2 * pad_x
+                        if pad_x <= hx <= pad_x + bar_w:
+                            bar_temp = T_MIN + ((hx - pad_x) / bar_w) * (T_MAX - T_MIN)
+                            draw_text_with_shadow(view, f"Bar: {bar_temp:.1f}C", (12, 74), scale=0.5, color=(255, 255, 255))
+
+                display_frame = np.vstack([view, color_bar])
+                cv2.imshow(window_name, display_frame)
 
             key = cv2.waitKey(1) & 0xFF
             if key in (ord('q'), 27):
