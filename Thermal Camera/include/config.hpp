@@ -21,6 +21,11 @@
 #define TFT_MISO          39  // SPI MISO (SDO on display)
 #define TFT_LED           21  // Backlight control
 
+// MISO / SDO Diagnostic check:
+// - Set to true to detect display presence & disconnection via SPI MISO (GPIO 39) register readback.
+// - Set to false only if using write-only display wiring (no SDO wire connected).
+#define CHECK_TFT_MISO    true
+
 // On-board WS2812 NeoPixel RGB LED (as in ESP32-S3 Test)
 #define RGB_PIN           48
 #define NUM_PIXELS        1
@@ -48,7 +53,7 @@
 // 1 = 90 degrees clockwise
 // 2 = 180 degrees (upside down)
 // 3 = 270 degrees clockwise (90 degrees counter-clockwise)
-#define CAMERA_ROTATION   1
+#define CAMERA_ROTATION   3
 
 // When rotated 90 or 270 degrees on a 320x240 landscape display:
 // - false: Preserves true 3:4 aspect ratio (180x240 centered) with dedicated side panels for HUD & color bar

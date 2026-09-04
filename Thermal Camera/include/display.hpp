@@ -11,5 +11,6 @@ extern Adafruit_ILI9341 tft;
 
 // Function prototypes
 bool initDisplay();
+bool checkDisplayConnected();
 void displayTask(void *pvParameters);
 

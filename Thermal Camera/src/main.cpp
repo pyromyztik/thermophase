@@ -2,7 +2,7 @@
 #include "config.hpp"
 #include "thermal_types.hpp"
 #include "thermal_sensor.hpp"
-#include "display_task.hpp"
+#include "display.hpp"
 #include "rgb_led.hpp"
 #include "diagnostics.hpp"
 
@@ -11,6 +11,11 @@ TaskHandle_t sensorTaskHandle = NULL;
 TaskHandle_t displayTaskHandle = NULL;
 TaskHandle_t diagTaskHandle = NULL;
 TaskHandle_t ledTaskHandle = NULL;
+
+// Global hardware health statuses
+volatile DeviceStatus globalDeviceStatus = STATUS_INITIALIZING;
+volatile SensorStatus globalSensorStatus = SENSOR_DISCONNECTED;
+volatile uint32_t sensorReconnectAttempts = 0;
 
 void setup() {
     Serial.begin(115200);
@@ -25,19 +30,7 @@ void setup() {
     // 1. Initialize On-board RGB LED
     initRGB();
 
-    // 2. Initialize ILI9341 Display & Bilinear tables
-    if (!initDisplay()) {
-        Serial.println("[MAIN] Display initialization failed! Halting.");
-        while (true) { delay(1000); }
-    }
-
-    // 3. Initialize MLX90640 Thermal Sensor
-    if (!initThermalSensor()) {
-        Serial.println("[MAIN] Thermal Sensor initialization failed! Check wiring.");
-        // Continue to allow diagnostics & LED
-    }
-    
-    // 4. Create RGB LED animation task on Core 0
+    // 2. Spawn RGB LED task immediately so LED feedback is live during boot
     xTaskCreatePinnedToCore(
         ledAnimationTask,
         "LED_Task",
@@ -47,6 +40,16 @@ void setup() {
         &ledTaskHandle,
         LED_TASK_CORE
     );
+
+    // 3. Initialize ILI9341 Display & Bilinear tables
+    if (!initDisplay()) {
+        Serial.println("[MAIN] Display initialization failed! Check wiring & SPI lines.");
+    }
+
+    // 4. Initialize MLX90640 Thermal Sensor
+    if (!initThermalSensor()) {
+        Serial.println("[MAIN] Thermal Sensor not detected. Auto-reconnect will poll in background.");
+    }
     // 5. Create Thermal Sensor acquisition task on Core 0
     xTaskCreatePinnedToCore(
         thermalSensorTask,
@@ -91,18 +94,68 @@ void loop() {
                     &diagTaskHandle,
                     DIAG_TASK_CORE
                 );
-            } else {
+            } else 
                 Serial.println("\n[WARN] Diagnostics task is already running.");
-            }
         }
     }
-    // Periodic telemetry output every 2 seconds
+
+    // Continuous status and error reporting every 2500 ms
     unsigned long now = millis();
-    if (now - lastTelemetryTime >= 2000) {
+    if (now - lastTelemetryTime >= 2500) {
         lastTelemetryTime = now;
-        Serial.printf("[TELEMETRY] Uptime: %lu ms | Free Heap: %u bytes | Min Free: %u bytes\n",
-                      now, ESP.getFreeHeap(), ESP.getMinFreeHeap());
+
+        bool displayErr = (globalDeviceStatus != STATUS_OK);
+        bool sensorErr = (globalSensorStatus != SENSOR_OK);
+
+        if (displayErr || sensorErr) {
+            // PROMINENT CONTINUOUS HARDWARE ALERT BANNER
+            Serial.println("\n****************************************************************");
+            Serial.println("                  >>> HARDWARE ALERT ACTIVE <<<                 ");
+            Serial.println("****************************************************************");
+
+            if (displayErr && sensorErr) {
+                Serial.println(" [!] FAULT: BOTH DISPLAY AND SENSOR HAVE CONNECTION ISSUES!");
+                Serial.println(" [*] ON-BOARD RGB LED: Alternating RED & YELLOW flashing");
+            } else if (displayErr) {
+                Serial.println(" [!] FAULT: TFT DISPLAY CONNECTION ISSUE DETECTED");
+                Serial.println(" [*] ON-BOARD RGB LED: Blinking RED");
+            } else {
+                Serial.println(" [!] FAULT: MLX90640 THERMAL SENSOR DISCONNECTED / NO SIGNAL");
+                Serial.println(" [*] ON-BOARD RGB LED: Blinking BRIGHT YELLOW");
+            }
+
+            if (displayErr) {
+                Serial.println("\n --- DISPLAY (ILI9341) TROUBLESHOOTING ---");
+                Serial.println("  1. If screen is BLANK WHITE: Check SPI signals & power:");
+                Serial.printf("     - CS: GPIO %d | DC: GPIO %d | RST: GPIO %d\n", TFT_CS, TFT_DC, TFT_RST);
+                Serial.printf("     - MOSI: GPIO %d (SDI) | SCK: GPIO %d | LED: GPIO %d / 3.3V\n", TFT_MOSI, TFT_SCK, TFT_LED);
+                Serial.printf("     - VCC: 5V/3.3V | GND: Common Ground\n");
+                Serial.println("  2. If screen IS SHOWING the image normally, but LED is red:");
+                Serial.printf("     - MISO (GPIO %d) is not connected to SDO on display.\n", TFT_MISO);
+                Serial.println("       (Set CHECK_TFT_MISO false in config.hpp to disable MISO check)");
+            }
+
+            if (sensorErr) {
+                Serial.println("\n --- THERMAL SENSOR (MLX90640) TROUBLESHOOTING ---");
+                Serial.printf("  Status: No response at I2C address 0x%02X (Reconnect attempts: %u)\n",
+                              MLX90640_I2CADDR_DEFAULT, sensorReconnectAttempts);
+                Serial.println("  Check jumper cables:");
+                Serial.printf("     - SDA: GPIO %d\n", PIN_I2C_SDA);
+                Serial.printf("     - SCL: GPIO %d\n", PIN_I2C_SCL);
+                Serial.println("     - VIN: 3.3V (CAUTION: Do NOT connect to 5V!)");
+                Serial.println("     - GND: Common Ground with ESP32");
+                Serial.println("  Auto-reconnecting every 1 second in background...");
+            }
+
+            Serial.printf("\n Uptime: %lu s | Free Heap: %u bytes\n", now / 1000, ESP.getFreeHeap());
+            Serial.println("****************************************************************\n");
+        } else {
+            // All systems healthy: periodic single-line telemetry
+            Serial.printf("[HEALTHY] Live Feed: %.1f FPS | Spot: %.1f C | Range: [%.1f - %.1f C] | Uptime: %lu s | Free Heap: %u B\n",
+                          displayFps, displayCenterTemp, displayMinTemp, displayMaxTemp, now / 1000, ESP.getFreeHeap());
+        }
     }
+
     delay(10); // Small yield
 }
 

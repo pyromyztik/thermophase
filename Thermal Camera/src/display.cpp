@@ -1,4 +1,4 @@
-#include "display_task.hpp"
+#include "display.hpp"
 
 // Hardware SPI TFT instance
 Adafruit_ILI9341 tft = Adafruit_ILI9341(&SPI, TFT_DC, TFT_CS, TFT_RST);
@@ -154,14 +154,51 @@ static void initIronbowPalette() {
                 float segmentSpan = keyColors[k + 1].pos - keyColors[k].pos;
                 float localRatio = (pos - keyColors[k].pos) / segmentSpan;
 
-                r = (uint8_t)(keyColors[k].r + localRatio * (keyColors[k + 1].r - keyColors[k].r));
-                g = (uint8_t)(keyColors[k].g + localRatio * (keyColors[k + 1].g - keyColors[k].g));
-                b = (uint8_t)(keyColors[k].b + localRatio * (keyColors[k + 1].b - keyColors[k].b));
+                r = (uint8_t)(keyColors[k].r + localRatio 
+                           * (keyColors[k + 1].r - keyColors[k].r));
+                g = (uint8_t)(keyColors[k].g + localRatio 
+                           * (keyColors[k + 1].g - keyColors[k].g));
+                b = (uint8_t)(keyColors[k].b + localRatio 
+                           * (keyColors[k + 1].b - keyColors[k].b));
                 break;
             }
         }
         ironbowPalette[i] = tft.color565(r, g, b);
     }
+}
+
+// Live telemetry variables for continuous serial reporting
+volatile float displayFps = 0.0f;
+volatile float displayCenterTemp = 0.0f;
+volatile float displayMinTemp = 0.0f;
+volatile float displayMaxTemp = 0.0f;
+
+bool checkDisplayConnected() {
+#if CHECK_TFT_MISO
+    // Ensure MISO pin has an active pulldown so a disconnected/floating wire reads 0x00
+    pinMode(TFT_MISO, INPUT_PULLDOWN);
+
+    // ILI9341 register read operations require SPI frequency <= 6.6 MHz (datasheet t_CONV=150ns).
+    // Temporarily switch SPI bus to safe 2 MHz read speed:
+    tft.setSPISpeed(2000000);
+
+    uint8_t powerMode = tft.readcommand8(ILI9341_RDMODE);
+    uint8_t madctl    = tft.readcommand8(ILI9341_RDMADCTL);
+    uint8_t pixFmt    = tft.readcommand8(ILI9341_RDPIXFMT);
+
+    // Restore full 40 MHz SPI clock for high-speed writes
+    tft.setSPISpeed(TFT_SPI_FREQ);
+
+    // A disconnected display (or floating/grounded pin) reads 0x00 (due to pulldown) or 0xFF.
+    // A connected ILI9341 returns non-zero, non-0xFF values.
+    bool connected = (powerMode != 0x00 && powerMode != 0xFF) ||
+                     (madctl != 0x00 && madctl != 0xFF) ||
+                     (pixFmt != 0x00 && pixFmt != 0xFF);
+
+    return connected;
+#else
+    return true;
+#endif
 }
 
 bool initDisplay() {
@@ -180,6 +217,9 @@ bool initDisplay() {
     digitalWrite(TFT_RST, HIGH);
     delay(200);
 
+    // Ensure MISO pin has internal pulldown active
+    pinMode(TFT_MISO, INPUT_PULLDOWN);
+
     // Initialize custom hardware SPI pins on ESP32-S3
     SPI.begin(TFT_SCK, TFT_MISO, TFT_MOSI, -1);
 
@@ -187,6 +227,48 @@ bool initDisplay() {
     tft.begin(TFT_SPI_FREQ);
     tft.setRotation(DISPLAY_ROTATION);
     tft.fillScreen(ILI9341_BLACK);
+
+#if CHECK_TFT_MISO
+    // Temporarily switch to 2 MHz safe SPI clock for register diagnostics
+    tft.setSPISpeed(2000000);
+    uint8_t powerMode = tft.readcommand8(ILI9341_RDMODE);
+    uint8_t madctl    = tft.readcommand8(ILI9341_RDMADCTL);
+    uint8_t pixFmt    = tft.readcommand8(ILI9341_RDPIXFMT);
+    uint8_t selfDiag  = tft.readcommand8(ILI9341_RDSELFDIAG);
+    tft.setSPISpeed(TFT_SPI_FREQ);
+
+    Serial.println("\n--------------------------------------------------");
+    Serial.println("  ILI9341 TFT Display Diagnostic Register Check   ");
+    Serial.println("--------------------------------------------------");
+    Serial.printf("  Display Power Mode: 0x%02X\n", powerMode);
+    Serial.printf("  MADCTL Mode:        0x%02X\n", madctl);
+    Serial.printf("  Pixel Format:       0x%02X\n", pixFmt);
+    Serial.printf("  Self Diagnostic:    0x%02X\n", selfDiag);
+    Serial.println("--------------------------------------------------");
+
+    bool displayOk = (powerMode != 0x00 && powerMode != 0xFF) ||
+                     (madctl != 0x00 && madctl != 0xFF) ||
+                     (pixFmt != 0x00 && pixFmt != 0xFF);
+
+    if (!displayOk) {
+        globalDeviceStatus = STATUS_DISPLAY_ERROR;
+        Serial.println("\n========================================================");
+        Serial.println(" [ERROR] TFT Display not responding via SPI MISO!");
+        Serial.println(" All diagnostic registers returned 0x00 or 0xFF.");
+        Serial.println(" Check hardware wiring:");
+        Serial.printf("   - CS: GPIO %d | DC: GPIO %d | RST: GPIO %d\n", TFT_CS, TFT_DC, TFT_RST);
+        Serial.printf("   - MOSI: GPIO %d (SDI) | SCK: GPIO %d | MISO: GPIO %d (SDO)\n", TFT_MOSI, TFT_SCK, TFT_MISO);
+        Serial.printf("   - VCC: 5V/3.3V | GND: Common Ground\n");
+        Serial.println("========================================================\n");
+    } else {
+        globalDeviceStatus = STATUS_OK;
+        Serial.println("[TFT] Display communication successfully verified via MISO!");
+    }
+#else
+    // Standard write-only mode: Mark OK unless memory allocation fails
+    globalDeviceStatus = STATUS_OK;
+    Serial.println("[TFT] Standard SPI write mode (CHECK_TFT_MISO=false).");
+#endif
 
     // Allocate offscreen double-buffer canvas in PSRAM/heap
     canvas = new GFXcanvas16(DISPLAY_WIDTH, DISPLAY_HEIGHT);
@@ -204,25 +286,131 @@ bool initDisplay() {
     initIronbowPalette();
 
     Serial.println("[TFT] ILI9341 display initialized successfully!");
-    return true;
+    return (globalDeviceStatus == STATUS_OK);
+}
+
+static void renderSensorErrorScreen(uint32_t attempt) {
+    if (canvas == nullptr) return;
+
+    canvas->fillScreen(ILI9341_BLACK);
+
+    // Red warning border
+    canvas->drawRect(4, 4, DISPLAY_WIDTH - 8, DISPLAY_HEIGHT - 8, ILI9341_RED);
+    canvas->drawRect(6, 6, DISPLAY_WIDTH - 12, DISPLAY_HEIGHT - 12, ILI9341_RED);
+
+    // Title banner
+    canvas->fillRect(12, 12, DISPLAY_WIDTH - 24, 28, ILI9341_RED);
+    canvas->setTextColor(ILI9341_WHITE);
+    canvas->setTextSize(2);
+    canvas->setCursor(20, 18);
+    canvas->print("THERMAL SENSOR ERROR");
+
+    // Subtitle
+    canvas->setTextSize(1);
+    canvas->setTextColor(ILI9341_YELLOW);
+    canvas->setCursor(18, 48);
+    canvas->println("MLX90640 not responding on I2C bus (Addr 0x33)");
+
+    // Pin checklist
+    canvas->setTextColor(ILI9341_WHITE);
+    canvas->setCursor(18, 68);
+    canvas->println("CHECK HARDWARE CONNECTIONS:");
+    canvas->setTextColor(ILI9341_LIGHTGREY);
+    canvas->setCursor(24, 84);
+    canvas->printf("  - SDA -> GPIO %d\n", PIN_I2C_SDA);
+    canvas->setCursor(24, 98);
+    canvas->printf("  - SCL -> GPIO %d\n", PIN_I2C_SCL);
+    canvas->setCursor(24, 112);
+    canvas->printf("  - VIN -> 3.3V (Do NOT connect to 5V!)");
+    canvas->setCursor(24, 126);
+    canvas->printf("  - GND -> GND  (Common ground with ESP32)");
+
+    // Auto reconnect status
+    canvas->setTextColor(ILI9341_GREENYELLOW);
+    canvas->setCursor(18, 150);
+    canvas->printf("Auto-reconnecting... (Attempt #%u)\n", attempt);
+
+    // LED Status hint
+    canvas->setTextColor(ILI9341_WHITE);
+    canvas->setCursor(18, 172);
+    canvas->println("STATUS INDICATOR (On-board RGB LED):");
+    canvas->setTextColor(ILI9341_LIGHTGREY);
+    canvas->setCursor(24, 187);
+    canvas->println("  * Flashing Amber = Sensor disconnected");
+    canvas->setCursor(24, 201);
+    canvas->println("  * Blinking Red   = Display SPI disconnected");
+    canvas->setCursor(24, 215);
+    canvas->println("  * Rainbow Cycle  = All Systems Live");
+
+    // Push canvas to screen
+    tft.startWrite();
+    tft.setAddrWindow(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    tft.writePixels(canvas->getBuffer(), DISPLAY_WIDTH * DISPLAY_HEIGHT);
+    tft.endWrite();
 }
 
 void displayTask(void *pvParameters) {
-    Serial.println("[TASK] TFT Display & Scaling Task started on Core " + String(xPortGetCoreID()));
+    Serial.println("[TASK] TFT Display & Scaling Task started on Core " 
+        + String(xPortGetCoreID()));
 
     ThermalFrame currentFrame;
     uint32_t lastFpsCalc = millis();
     uint32_t frameCount = 0;
     float currentFps = 0.0f;
+    uint32_t lastDisplayPoll = 0;
+    int displayFailCount = 0;
 
     while (true) {
-        // Wait for frame notification from sensor task
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        uint32_t now = millis();
 
-        // Fetch latest frame from thread-safe double buffer
-        if (!getLatestThermalFrame(currentFrame)) {
+        // 1. Dynamic Display Connection Monitoring (checks every 1000 ms)
+        #if CHECK_TFT_MISO
+        if (now - lastDisplayPoll >= 1000) {
+            lastDisplayPoll = now;
+            bool connected = checkDisplayConnected();
+
+            if (!connected) {
+                displayFailCount++;
+                if (displayFailCount >= 2) {
+                    if (globalDeviceStatus != STATUS_DISPLAY_ERROR) {
+                        Serial.println("\n[TFT] ERROR: Display connection lost or disconnected!");
+                    }
+                    globalDeviceStatus = STATUS_DISPLAY_ERROR;
+                }
+            } else {
+                if (globalDeviceStatus == STATUS_DISPLAY_ERROR) {
+                    Serial.println("\n[TFT] SUCCESS: Display reconnected! Re-initializing ILI9341...");
+                    tft.begin(TFT_SPI_FREQ);
+                    tft.setRotation(DISPLAY_ROTATION);
+                    tft.fillScreen(ILI9341_BLACK);
+                }
+                displayFailCount = 0;
+                globalDeviceStatus = STATUS_OK;
+            }
+        }
+        #endif
+
+        // If display is disconnected, pause and wait for reconnect
+        if (globalDeviceStatus != STATUS_OK) {
+            vTaskDelay(pdMS_TO_TICKS(200));
             continue;
         }
+
+        // If sensor is disconnected or failed, show on-screen error card
+        if (globalSensorStatus != SENSOR_OK) {
+            renderSensorErrorScreen(sensorReconnectAttempts);
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
+
+        // Wait for frame notification from sensor task with 500ms timeout
+        uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));
+        // If no notif received within timeout, loop to check sensor status
+        if (notified == 0) 
+            continue;
+        // Fetch latest frame from thread-safe double buffer
+        if (!getLatestThermalFrame(currentFrame)) 
+            continue;
 
         // Rotate thermal frame to configured orientation
         rotateSensorFrame(currentFrame.temperatures, rotatedGrid, CAMERA_ROTATION);
@@ -239,10 +427,9 @@ void displayTask(void *pvParameters) {
         if (vpX > 0) {
             canvas->fillScreen(ILI9341_BLACK);
         }
-
         uint16_t* cBuf = canvas->getBuffer();
 
-        // 1. Bilinear interpolation directly into the offscreen canvas memory
+        // Bilinear interpolation directly into the offscreen canvas memory
         for (int y = 0; y < vpH; ++y) {
             uint8_t y0 = rowTable[y].y0;
             uint8_t y1 = rowTable[y].y1;
@@ -274,14 +461,18 @@ void displayTask(void *pvParameters) {
 
         // Calculate real-time display FPS
         frameCount++;
-        uint32_t now = millis();
+        now = millis();
         if (now - lastFpsCalc >= 1000) {
             currentFps = (frameCount * 1000.0f) / (now - lastFpsCalc);
             frameCount = 0;
             lastFpsCalc = now;
+            displayFps = currentFps;
         }
+        displayCenterTemp = currentFrame.centerTemp;
+        displayMinTemp = currentFrame.minTemp;
+        displayMaxTemp = currentFrame.maxTemp;
 
-        // 2. Draw HUD and OSD Overlays directly into the offscreen canvas
+        // Draw HUD and OSD Overlays directly into the offscreen canvas
         int cx = vpX + vpW / 2;
         int cy = vpY + vpH / 2;
 
@@ -291,7 +482,7 @@ void displayTask(void *pvParameters) {
         canvas->drawPixel(cx, cy, ILI9341_RED);
 
         if (vpX > 0) {
-            // --- SIDE PANELS LAYOUT (Zero obstruction on thermal feed) ---
+            // --- SIDE PANELS LAYOUT ---
             canvas->drawRect(vpX - 1, vpY, vpW + 2, vpH, ILI9341_WHITE);
 
             // Left panel: Telemetry readouts
@@ -308,7 +499,7 @@ void displayTask(void *pvParameters) {
             canvas->printf("%.1f", currentFrame.centerTemp);
             canvas->setTextSize(1);
             canvas->setCursor(4, 66);
-            canvas->print("deg C");
+            canvas->print("Celsius");
 
             canvas->setTextColor(ILI9341_CYAN);
             canvas->setCursor(4, 105);
@@ -346,7 +537,7 @@ void displayTask(void *pvParameters) {
             canvas->printf("%.0f", smoothedMin);
 
         } else {
-            // --- FULLSCREEN BADGE OVERLAYS (Offscreen composited, zero flicker) ---
+            // --- FULLSCREEN BADGE OVERLAYS ---
             canvas->fillRect(cx - 55, 4, 110, 18, ILI9341_BLACK);
             canvas->drawRect(cx - 55, 4, 110, 18, ILI9341_WHITE);
             canvas->setTextColor(ILI9341_WHITE);
@@ -369,8 +560,7 @@ void displayTask(void *pvParameters) {
             canvas->setCursor(DISPLAY_WIDTH - 73, 9);
             canvas->printf("FPS: %.1f", currentFps);
         }
-
-        // 3. Push the entire composite frame to the ILI9341 display in ONE continuous SPI burst
+        // Push the entire composite frame to the ILI9341 display in ONE continuous SPI burst
         tft.startWrite();
         tft.setAddrWindow(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT);
         tft.writePixels(canvas->getBuffer(), DISPLAY_WIDTH * DISPLAY_HEIGHT);
