@@ -46,26 +46,21 @@ void initUI() {
 AppState getAppState() {
     return currentAppState;
 }
-
 void setAppState(AppState newState) {
     if (currentAppState != newState) {
         currentAppState = newState;
         Serial.printf("[UI] State changed to: %d\n", (int)currentAppState);
     }
 }
-
 int getCameraRotationSetting() {
     return currentRotationSetting;
 }
-
 TempUnit getTempUnitSetting() {
     return currentTempUnitSetting;
 }
-
 PaletteType getPaletteSetting() {
     return currentPaletteSetting;
 }
-
 bool getMirrorSetting() {
     return currentMirrorSetting;
 }
@@ -156,7 +151,6 @@ bool processUIInput(EncoderEventType event) {
             }
             break;
     }
-
     return false;
 }
 
@@ -170,7 +164,6 @@ static void drawHeader(GFXcanvas16* canvas, const char* title) {
     // Grey separator line underneath
     canvas->drawFastHLine(0, 32, DISPLAY_WIDTH, UI_SEPARATOR_COLOR);
 }
-
 static void drawFooter(GFXcanvas16* canvas, const char* hints) {
     // Grey separator line above hints
     canvas->drawFastHLine(0, 216, DISPLAY_WIDTH, UI_SEPARATOR_COLOR);
@@ -227,7 +220,6 @@ void renderCurrentUI(GFXcanvas16* canvas) {
                 canvas->print(mainMenuLabels[i]);
             }
         }
-
         drawFooter(canvas, "[Rotate] Navigate   |   [Click] Select");
 
     } else if (currentAppState == APP_STATE_SETTINGS) {
@@ -297,7 +289,6 @@ void renderCurrentUI(GFXcanvas16* canvas) {
                 }
             }
         }
-
         drawFooter(canvas, "[Rotate] Navigate   |   [Click] Change / Back");
     }
 }

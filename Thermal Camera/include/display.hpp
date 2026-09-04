@@ -14,6 +14,7 @@ extern Adafruit_ILI9341 tft;
 // Function prototypes
 bool initDisplay();
 bool checkDisplayConnected();
+void showBootScreen(const char* statusText, uint8_t progressPercent);
 void displayTask(void *pvParameters);
 
 // Runtime display setting updates

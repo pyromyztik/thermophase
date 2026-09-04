@@ -87,6 +87,12 @@ bool initThermalSensor() {
     mlx.setResolution(MLX90640_ADC_18BIT);
     mlx.setRefreshRate(THERMAL_REFRESH_RATE);
 
+    // Warm-up sensor: read 2 initial subpages so both chess subpages are primed
+    float warmupBuf[SENSOR_PIXELS];
+    for (size_t i = 0; i < SENSOR_PIXELS; ++i) warmupBuf[i] = 25.0f;
+    mlx.getFrame(warmupBuf);
+    mlx.getFrame(warmupBuf);
+
     globalSensorStatus = SENSOR_OK;
     Serial.printf("[MLX90640] Sensor ready. Refresh setting: %d, I2C Clock: %lu Hz\n",
                   (int)THERMAL_REFRESH_RATE, Wire.getClock());
@@ -96,7 +102,10 @@ bool initThermalSensor() {
 void thermalSensorTask(void *pvParameters) {
     Serial.println("[TASK] Thermal Sensor Task started on Core " + String(xPortGetCoreID()));
 
-    ThermalFrame localFrame;
+    ThermalFrame localFrame = {};
+    for (size_t i = 0; i < SENSOR_PIXELS; ++i) {
+        localFrame.temperatures[i] = 25.0f;
+    }
     localFrame.frameIndex = 0;
     int consecutiveErrors = 0;
 

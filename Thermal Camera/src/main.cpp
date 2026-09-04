@@ -21,22 +21,32 @@ volatile SensorStatus globalSensorStatus = SENSOR_DISCONNECTED;
 volatile uint32_t sensorReconnectAttempts = 0;
 
 void setup() {
-    Serial.begin(115200);
-    while (!Serial && millis() < 3000) 
-        { /* Wait briefly for native USB CDC attachment */ }
-    Serial.setTimeout(50);
+    // 0. Ensure TFT backlight is immediately OFF to eliminate any white flash
+    pinMode(TFT_LED, OUTPUT);
+    digitalWrite(TFT_LED, LOW);
 
     // Initialize power state and check if awakened from Deep Sleep
     powerWakeInit();
+
+    Serial.begin(115200);
+    while (!Serial && millis() < 800) 
+        { /* Wait briefly for native USB CDC attachment without stalling cold boot */ }
+    Serial.setTimeout(50);
 
     Serial.println("\n========================================================");
     Serial.println("  ESP32-S3 Real-Time Bilinear Thermal Camera System");
     Serial.println("========================================================");
 
-    // 1. Initialize On-board RGB LED
-    initRGB();
+    // 1. Initialize ILI9341 Display & Bilinear tables FIRST and render Boot Screen
+    // (TFT_LED is kept LOW until the boot screen is drawn in canvas and pushed to LCD memory)
+    if (!initDisplay()) {
+        Serial.println("[MAIN] Display initialization failed! Check wiring & SPI lines.");
+    }
+    showBootScreen("Loading UI & Controls...", 25);
 
-    // 2. Spawn RGB LED task immediately so LED feedback is live during boot
+    // 2. Initialize On-board RGB LED
+    initRGB();
+    // 3. Spawn RGB LED task immediately so LED feedback is live during boot
     xTaskCreatePinnedToCore(
         ledAnimationTask,
         "LED_Task",
@@ -47,15 +57,14 @@ void setup() {
         LED_TASK_CORE
     );
 
-    // 3. Initialize UI State Machine (starts in live thermal view)
+    // 4. Initialize UI State Machine (starts in live thermal view)
     initUI();
 
-    // 4. Initialize HW-040 Rotary Encoder (GPIO 4, 5, 6)
+    // 5. Initialize HW-040 Rotary Encoder (GPIO 4, 5, 6)
     if (!initEncoder()) {
         Serial.println("[MAIN] HW-040 Rotary Encoder initialization failed!");
     }
-
-    // 5. Spawn HW-040 Encoder polling task on Core 0
+    // 6. Spawn HW-040 Encoder polling task on Core 0
     xTaskCreatePinnedToCore(
         encoderTask,
         "Encoder_Task",
@@ -66,14 +75,13 @@ void setup() {
         ENCODER_TASK_CORE
     );
 
-    // 6. Initialize ILI9341 Display & Bilinear tables
-    if (!initDisplay()) {
-        Serial.println("[MAIN] Display initialization failed! Check wiring & SPI lines.");
-    }
-
-    // 7. Initialize MLX90640 Thermal Sensor
+    showBootScreen("Connecting MLX90640...", 55);
+    // 7. Initialize MLX90640 Thermal Sensor (includes 2-subpage warmup)
     if (!initThermalSensor()) {
         Serial.println("[MAIN] Thermal Sensor not detected. Auto-reconnect will poll in background.");
+        showBootScreen("Sensor Disconnected - Retrying...", 75);
+    } else {
+        showBootScreen("Calibrating Thermal Feed...", 85);
     }
 
     // 8. Create Thermal Sensor acquisition task on Core 0
@@ -86,6 +94,9 @@ void setup() {
         &sensorTaskHandle,
         SENSOR_TASK_CORE
     );
+
+    showBootScreen("System Ready!", 100);
+    delay(350); // Clean, polished hold so user sees full boot completion
 
     // 9. Create Display & Bilinear scaling task on Core 1
     xTaskCreatePinnedToCore(

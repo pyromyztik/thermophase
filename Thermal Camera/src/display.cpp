@@ -37,23 +37,23 @@ static const uint16_t* activePalette = ironbowPalette;
 static float smoothedMin = 20.0f;
 static float smoothedMax = 35.0f;
 
-// Rotate the raw 32x24 sensor array to the specified orientation and mirror mode
+// Rotate the raw 32x24 sensor array to the specified orientation and mirror mode (always horizontal on-screen flip)
 static void rotateSensorFrame(const float* src, float* dst, int rotation, bool mirror) {
     if (rotation == 0) {
         // 0 degrees (32 cols x 24 rows)
         for (int r = 0; r < 24; ++r) {
             for (int c = 0; c < 32; ++c) {
-                int col = mirror ? (31 - c) : c;
-                dst[r * 32 + c] = src[r * 32 + col];
+                int screen_c = mirror ? (31 - c) : c;
+                dst[r * 32 + c] = src[r * 32 + screen_c];
             }
         }
     } else if (rotation == 1) {
         // 90 degrees clockwise (24 cols x 32 rows)
         for (int r = 0; r < 32; ++r) {
             for (int c = 0; c < 24; ++c) {
+                int screen_c = mirror ? (23 - c) : c;
+                int orig_r = 23 - screen_c;
                 int orig_c = r;
-                int orig_r = 23 - c;
-                if (mirror) orig_c = 31 - orig_c;
                 dst[r * 24 + c] = src[orig_r * 32 + orig_c];
             }
         }
@@ -61,9 +61,9 @@ static void rotateSensorFrame(const float* src, float* dst, int rotation, bool m
         // 180 degrees (upside down, 32 cols x 24 rows)
         for (int r = 0; r < 24; ++r) {
             for (int c = 0; c < 32; ++c) {
-                int orig_c = 31 - c;
+                int screen_c = mirror ? (31 - c) : c;
                 int orig_r = 23 - r;
-                if (mirror) orig_c = c;
+                int orig_c = 31 - screen_c;
                 dst[r * 32 + c] = src[orig_r * 32 + orig_c];
             }
         }
@@ -71,9 +71,9 @@ static void rotateSensorFrame(const float* src, float* dst, int rotation, bool m
         // 270 degrees clockwise (24 cols x 32 rows)
         for (int r = 0; r < 32; ++r) {
             for (int c = 0; c < 24; ++c) {
+                int screen_c = mirror ? (23 - c) : c;
+                int orig_r = screen_c;
                 int orig_c = 31 - r;
-                int orig_r = c;
-                if (mirror) orig_c = r;
                 dst[r * 24 + c] = src[orig_r * 32 + orig_c];
             }
         }
@@ -231,11 +231,9 @@ static float convertTemp(float tempC, TempUnit unit) {
     }
     return tempC;
 }
-
 static const char* getTempUnitSymbol(TempUnit unit) {
     return (unit == TEMP_UNIT_KELVIN) ? "K" : "C";
 }
-
 static const char* getTempUnitName(TempUnit unit) {
     return (unit == TEMP_UNIT_KELVIN) ? "Kelvin" : "Celsius";
 }
@@ -244,11 +242,9 @@ static const char* getTempUnitName(TempUnit unit) {
 void updateCameraRotation(int rotation) {
     recomputeBilinearTables(rotation);
 }
-
 void updateTempUnit(TempUnit unit) {
     currentTempUnit = unit;
 }
-
 void updatePalette(PaletteType palette) {
     currentPaletteType = palette;
     if (palette == PALETTE_WHITE_HOT) {
@@ -259,7 +255,6 @@ void updatePalette(PaletteType palette) {
         activePalette = ironbowPalette;
     }
 }
-
 void updateMirror(bool mirror) {
     currentMirrorFeed = mirror;
 }
@@ -291,19 +286,83 @@ bool checkDisplayConnected() {
     bool connected = (powerMode != 0x00 && powerMode != 0xFF) ||
                      (madctl != 0x00 && madctl != 0xFF) ||
                      (pixFmt != 0x00 && pixFmt != 0xFF);
-
     return connected;
 #else
     return true;
 #endif
 }
 
+void showBootScreen(const char* statusText, uint8_t progressPercent) {
+    if (canvas == nullptr) return;
+
+    // 1. Pure black background
+    canvas->fillScreen(ILI9341_BLACK);
+
+    // 2. Stylized Thermal Aperture / Reticle Icon at (160, 60)
+    int iconX = DISPLAY_WIDTH / 2;
+    int iconY = 60;
+    canvas->drawCircle(iconX, iconY, 18, 0x52AA);          // Outer ring (soft grey)
+    canvas->drawCircle(iconX, iconY, 13, UI_ACCENT_COLOR); // Mid ring (accent red)
+    canvas->drawCircle(iconX, iconY, 12, UI_ACCENT_COLOR);
+    canvas->fillCircle(iconX, iconY, 5, ILI9341_YELLOW);   // Core (yellow spot)
+    canvas->fillCircle(iconX, iconY, 2, ILI9341_WHITE);    // Center hot core
+    // Crosshair ticks
+    canvas->drawFastHLine(iconX - 25, iconY, 6, UI_ACCENT_COLOR);
+    canvas->drawFastHLine(iconX + 20, iconY, 6, UI_ACCENT_COLOR);
+    canvas->drawFastVLine(iconX, iconY - 25, 6, UI_ACCENT_COLOR);
+    canvas->drawFastVLine(iconX, iconY + 20, 6, UI_ACCENT_COLOR);
+
+    // 3. Main Title & Subtitle
+    canvas->setTextColor(UI_TEXT_COLOR);
+    canvas->setTextSize(2);
+    canvas->setCursor(100, 90);
+    canvas->print("THERMOPHASE");
+    canvas->setTextSize(1);
+    canvas->setTextColor(0xBDF7); // Sleek silver
+    canvas->setCursor(88, 112);
+    canvas->print("REAL-TIME THERMAL IMAGER");
+
+    // 4. Progress Bar
+    int pBarX = 50;
+    int pBarY = 178;
+    int pBarW = 220;
+    int pBarH = 6;
+    canvas->drawRect(pBarX - 1, pBarY - 1, pBarW + 2, pBarH + 2, 0x7BEF);
+    if (progressPercent > 100) progressPercent = 100;
+    int fillW = (progressPercent * pBarW) / 100;
+    if (fillW > 0) {
+        canvas->fillRect(pBarX, pBarY, fillW, pBarH, UI_ACCENT_COLOR);
+    }
+
+    // 5. Status message below progress bar
+    canvas->setTextColor(ILI9341_LIGHTGREY);
+    canvas->setTextSize(1);
+    canvas->setCursor(pBarX, 194);
+    canvas->print(statusText != nullptr ? statusText : "Initializing...");
+
+    // Percentage on right side
+    char pctStr[8];
+    snprintf(pctStr, sizeof(pctStr), "%u%%", progressPercent);
+    canvas->setTextColor(0xBDF7);
+    canvas->setCursor(pBarX + pBarW - 24, 194);
+    canvas->print(pctStr);
+
+    // 6. Push composite boot frame to ILI9341 in ONE SPI burst
+    tft.startWrite();
+    tft.setAddrWindow(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    tft.writePixels(canvas->getBuffer(), DISPLAY_WIDTH * DISPLAY_HEIGHT);
+    tft.endWrite();
+
+    // 7. Turn on backlight - no white flashes this way!
+    digitalWrite(TFT_LED, HIGH);
+}
+
 bool initDisplay() {
     Serial.println("[TFT] Initializing display pins and SPI bus...");
 
-    // Backlight control
+    // Backlight control - KEEP OFF INITIALLY to avoid white screen!
     pinMode(TFT_LED, OUTPUT);
-    digitalWrite(TFT_LED, HIGH);
+    digitalWrite(TFT_LED, LOW);
 
     // Hardware reset sequence
     pinMode(TFT_RST, OUTPUT);
@@ -381,6 +440,9 @@ bool initDisplay() {
     // Precompute bilinear scaling tables and initialize all thermal palettes
     recomputeBilinearTables(currentCameraRotation);
     initAllPalettes();
+
+    // Display initial Boot Screen and turn on backlight safely
+    showBootScreen("Starting System...", 15);
 
     Serial.println("[TFT] ILI9341 display initialized successfully!");
     return (globalDeviceStatus == STATUS_OK);
@@ -546,17 +608,26 @@ void displayTask(void *pvParameters) {
         // Rotate thermal frame to configured orientation and mirror settings
         rotateSensorFrame(currentFrame.temperatures, rotatedGrid, currentCameraRotation, currentMirrorFeed);
 
-        // Smooth min/max to prevent flickering
-        smoothedMin += 0.25f * (currentFrame.minTemp - smoothedMin);
-        smoothedMax += 0.25f * (currentFrame.maxTemp - smoothedMax);
+        // Initialize auto-range immediately to actual scene min/max on first frame
+        static bool autoRangeInitialized = false;
+        if (!autoRangeInitialized) {
+            smoothedMin = currentFrame.minTemp;
+            smoothedMax = currentFrame.maxTemp;
+            autoRangeInitialized = true;
+        } else {
+            smoothedMin += 0.25f * (currentFrame.minTemp - smoothedMin);
+            smoothedMax += 0.25f * (currentFrame.maxTemp - smoothedMax);
+        }
 
         float range = smoothedMax - smoothedMin;
         if (range < 1.0f) range = 1.0f;
         float invRange = 255.0f / range;
 
-        // Clear canvas if using side panels
-        if (vpX > 0) {
+        // Clear canvas if using side panels or on first thermal frame transition
+        static bool firstThermalFrameRendered = false;
+        if (vpX > 0 || !firstThermalFrameRendered) {
             canvas->fillScreen(ILI9341_BLACK);
+            firstThermalFrameRendered = true;
         }
         uint16_t* cBuf = canvas->getBuffer();
 

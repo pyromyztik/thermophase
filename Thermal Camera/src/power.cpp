@@ -18,6 +18,10 @@ void powerWakeInit() {
     gpio_hold_dis((gpio_num_t)RGB_PIN);
     gpio_hold_dis((gpio_num_t)TFT_LED);
 
+    // Immediately drive TFT backlight LOW to prevent white flash
+    pinMode(TFT_LED, OUTPUT);
+    digitalWrite(TFT_LED, LOW);
+
     if (wasWokenFromDeepSleep()) {
         Serial.println("\n[PWR] System awakened from Deep Sleep via HW-040 button click!");
         rtc_gpio_deinit((gpio_num_t)PIN_ENCODER_SW);

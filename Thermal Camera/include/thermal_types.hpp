@@ -17,7 +17,6 @@ struct ColInterp {
     uint8_t x1;
     float fx;
 };
-
 struct RowInterp {
     uint8_t y0;
     uint8_t y1;
@@ -31,7 +30,6 @@ enum DeviceStatus {
     STATUS_DISPLAY_ERROR,
     STATUS_SENSOR_ERROR
 };
-
 enum SensorStatus {
     SENSOR_OK,
     SENSOR_DISCONNECTED,
