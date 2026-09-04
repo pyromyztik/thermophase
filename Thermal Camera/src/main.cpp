@@ -5,6 +5,9 @@
 #include "display.hpp"
 #include "rgb_led.hpp"
 #include "diagnostics.hpp"
+#include "encoder.hpp"
+#include "ui.hpp"
+#include "power.hpp"
 
 // Global task handles
 TaskHandle_t sensorTaskHandle = NULL;
@@ -22,6 +25,9 @@ void setup() {
     while (!Serial && millis() < 3000) 
         { /* Wait briefly for native USB CDC attachment */ }
     Serial.setTimeout(50);
+
+    // Initialize power state and check if awakened from Deep Sleep
+    powerWakeInit();
 
     Serial.println("\n========================================================");
     Serial.println("  ESP32-S3 Real-Time Bilinear Thermal Camera System");
@@ -41,16 +47,36 @@ void setup() {
         LED_TASK_CORE
     );
 
-    // 3. Initialize ILI9341 Display & Bilinear tables
+    // 3. Initialize UI State Machine (starts in live thermal view)
+    initUI();
+
+    // 4. Initialize HW-040 Rotary Encoder (GPIO 4, 5, 6)
+    if (!initEncoder()) {
+        Serial.println("[MAIN] HW-040 Rotary Encoder initialization failed!");
+    }
+
+    // 5. Spawn HW-040 Encoder polling task on Core 0
+    xTaskCreatePinnedToCore(
+        encoderTask,
+        "Encoder_Task",
+        ENCODER_TASK_STACK,
+        NULL,
+        ENCODER_TASK_PRIO,
+        &encoderTaskHandle,
+        ENCODER_TASK_CORE
+    );
+
+    // 6. Initialize ILI9341 Display & Bilinear tables
     if (!initDisplay()) {
         Serial.println("[MAIN] Display initialization failed! Check wiring & SPI lines.");
     }
 
-    // 4. Initialize MLX90640 Thermal Sensor
+    // 7. Initialize MLX90640 Thermal Sensor
     if (!initThermalSensor()) {
         Serial.println("[MAIN] Thermal Sensor not detected. Auto-reconnect will poll in background.");
     }
-    // 5. Create Thermal Sensor acquisition task on Core 0
+
+    // 8. Create Thermal Sensor acquisition task on Core 0
     xTaskCreatePinnedToCore(
         thermalSensorTask,
         "Sensor_Task",
@@ -60,7 +86,8 @@ void setup() {
         &sensorTaskHandle,
         SENSOR_TASK_CORE
     );
-    // 6. Create Display & Bilinear scaling task on Core 1
+
+    // 9. Create Display & Bilinear scaling task on Core 1
     xTaskCreatePinnedToCore(
         displayTask,
         "Display_Task",

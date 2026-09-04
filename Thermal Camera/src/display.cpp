@@ -21,24 +21,30 @@ static int gridH = SENSOR_HEIGHT;
 // Rotated thermal sensor temperature buffer
 static float rotatedGrid[SENSOR_PIXELS];
 
-// 256-color Ironbow thermal colormap
+// Runtime configurable settings
+static int currentCameraRotation = CAMERA_ROTATION;
+static bool currentMirrorFeed = MIRROR_HORIZONTAL;
+static TempUnit currentTempUnit = TEMP_UNIT_CELSIUS;
+static PaletteType currentPaletteType = PALETTE_IRONBOW;
+
+// 256-color thermal palettes
 static uint16_t ironbowPalette[256];
+static uint16_t whiteHotPalette[256];
+static uint16_t rainbowPalette[256];
+static const uint16_t* activePalette = ironbowPalette;
 
 // Smoothing variables for auto-ranging
 static float smoothedMin = 20.0f;
 static float smoothedMax = 35.0f;
 
-// Rotate the raw 32x24 sensor array to the configured orientation
-static void rotateSensorFrame(const float* src, float* dst, int rotation) {
+// Rotate the raw 32x24 sensor array to the specified orientation and mirror mode
+static void rotateSensorFrame(const float* src, float* dst, int rotation, bool mirror) {
     if (rotation == 0) {
-        // 0 degrees (normal)
+        // 0 degrees (32 cols x 24 rows)
         for (int r = 0; r < 24; ++r) {
             for (int c = 0; c < 32; ++c) {
-                #if MIRROR_HORIZONTAL
-                dst[r * 32 + c] = src[r * 32 + (31 - c)];
-                #else
-                dst[r * 32 + c] = src[r * 32 + c];
-                #endif
+                int col = mirror ? (31 - c) : c;
+                dst[r * 32 + c] = src[r * 32 + col];
             }
         }
     } else if (rotation == 1) {
@@ -47,9 +53,7 @@ static void rotateSensorFrame(const float* src, float* dst, int rotation) {
             for (int c = 0; c < 24; ++c) {
                 int orig_c = r;
                 int orig_r = 23 - c;
-                #if MIRROR_HORIZONTAL
-                orig_c = 31 - orig_c;
-                #endif
+                if (mirror) orig_c = 31 - orig_c;
                 dst[r * 24 + c] = src[orig_r * 32 + orig_c];
             }
         }
@@ -59,9 +63,7 @@ static void rotateSensorFrame(const float* src, float* dst, int rotation) {
             for (int c = 0; c < 32; ++c) {
                 int orig_c = 31 - c;
                 int orig_r = 23 - r;
-                #if MIRROR_HORIZONTAL
-                orig_c = c;
-                #endif
+                if (mirror) orig_c = c;
                 dst[r * 32 + c] = src[orig_r * 32 + orig_c];
             }
         }
@@ -71,40 +73,39 @@ static void rotateSensorFrame(const float* src, float* dst, int rotation) {
             for (int c = 0; c < 24; ++c) {
                 int orig_c = 31 - r;
                 int orig_r = c;
-                #if MIRROR_HORIZONTAL
-                orig_c = r;
-                #endif
+                if (mirror) orig_c = r;
                 dst[r * 24 + c] = src[orig_r * 32 + orig_c];
             }
         }
     }
 }
 
-// Precompute bilinear interpolation mapping coefficients
-static void initBilinearTables() {
-#if (CAMERA_ROTATION == 1 || CAMERA_ROTATION == 3)
-    gridW = SENSOR_HEIGHT; // 24
-    gridH = SENSOR_WIDTH;  // 32
-    #if STRETCH_ROTATED_IMAGE
-    vpW = DISPLAY_WIDTH;
-    vpH = DISPLAY_HEIGHT;
-    vpX = 0;
-    vpY = 0;
-    #else
-    // Maintain true 3:4 aspect ratio (180x240 on 320x240 display)
-    vpH = DISPLAY_HEIGHT;                 // 240
-    vpW = (vpH * gridW) / gridH;          // (240 * 24) / 32 = 180
-    vpX = (DISPLAY_WIDTH - vpW) / 2;      // 70 px left margin
-    vpY = 0;
-    #endif
-#else
-    gridW = SENSOR_WIDTH;  // 32
-    gridH = SENSOR_HEIGHT; // 24
-    vpW = DISPLAY_WIDTH;   // 320
-    vpH = DISPLAY_HEIGHT;  // 240
-    vpX = 0;
-    vpY = 0;
-#endif
+// Dynamically compute bilinear interpolation mapping coefficients for any orientation
+static void recomputeBilinearTables(int rotation) {
+    currentCameraRotation = rotation;
+    if (rotation == 1 || rotation == 3) {
+        gridW = SENSOR_HEIGHT; // 24
+        gridH = SENSOR_WIDTH;  // 32
+        #if STRETCH_ROTATED_IMAGE
+        vpW = DISPLAY_WIDTH;
+        vpH = DISPLAY_HEIGHT;
+        vpX = 0;
+        vpY = 0;
+        #else
+        // Maintain true 3:4 aspect ratio (180x240 on 320x240 display)
+        vpH = DISPLAY_HEIGHT;                 // 240
+        vpW = (vpH * gridW) / gridH;          // (240 * 24) / 32 = 180
+        vpX = (DISPLAY_WIDTH - vpW) / 2;      // 70 px left margin
+        vpY = 0;
+        #endif
+    } else {
+        gridW = SENSOR_WIDTH;  // 32
+        gridH = SENSOR_HEIGHT; // 24
+        vpW = DISPLAY_WIDTH;   // 320
+        vpH = DISPLAY_HEIGHT;  // 240
+        vpX = 0;
+        vpY = 0;
+    }
 
     for (int x = 0; x < vpW; ++x) {
         float u = (float)x * (float)(gridW - 1) / (float)(vpW - 1);
@@ -124,8 +125,12 @@ static void initBilinearTables() {
         rowTable[y].fy = v - (float)y0;
     }
 
-    Serial.printf("[TFT] Viewport: %dx%d at (%d,%d), Grid: %dx%d, Rotation: %d\n",
-                  vpW, vpH, vpX, vpY, gridW, gridH, CAMERA_ROTATION);
+    if (canvas != nullptr) {
+        canvas->fillScreen(ILI9341_BLACK);
+    }
+
+    Serial.printf("[TFT] Recomputed Viewport: %dx%d at (%d,%d), Grid: %dx%d, Rotation: %d\n",
+                  vpW, vpH, vpX, vpY, gridW, gridH, currentCameraRotation);
 }
 
 // Generate Ironbow (FLIR-style) 256-color RGB565 palette
@@ -165,6 +170,98 @@ static void initIronbowPalette() {
         }
         ironbowPalette[i] = tft.color565(r, g, b);
     }
+}
+
+// Generate White-Hot monochrome (grayscale) 256-color palette
+static void initWhiteHotPalette() {
+    for (int i = 0; i < 256; ++i) {
+        whiteHotPalette[i] = tft.color565((uint8_t)i, (uint8_t)i, (uint8_t)i);
+    }
+}
+
+// Generate classic 7-color spectral Rainbow palette
+static void initRainbowPalette() {
+    struct ColorPoint {
+        float pos;
+        uint8_t r, g, b;
+    };
+
+    const ColorPoint keyColors[] = {
+        {0.00f, 0,   0,   255},  // Blue
+        {0.25f, 0,   255, 255},  // Cyan
+        {0.50f, 0,   255, 0},    // Green
+        {0.75f, 255, 255, 0},    // Yellow
+        {1.00f, 255, 0,   0}     // Red
+    };
+    const size_t numKeys = sizeof(keyColors) / sizeof(keyColors[0]);
+
+    for (int i = 0; i < 256; ++i) {
+        float pos = (float)i / 255.0f;
+        uint8_t r = 0, g = 0, b = 0;
+
+        for (size_t k = 0; k < numKeys - 1; ++k) {
+            if (pos >= keyColors[k].pos && pos <= keyColors[k + 1].pos) {
+                float segmentSpan = keyColors[k + 1].pos - keyColors[k].pos;
+                float localRatio = (pos - keyColors[k].pos) / segmentSpan;
+
+                r = (uint8_t)(keyColors[k].r + localRatio 
+                           * (keyColors[k + 1].r - keyColors[k].r));
+                g = (uint8_t)(keyColors[k].g + localRatio 
+                           * (keyColors[k + 1].g - keyColors[k].g));
+                b = (uint8_t)(keyColors[k].b + localRatio 
+                           * (keyColors[k + 1].b - keyColors[k].b));
+                break;
+            }
+        }
+        rainbowPalette[i] = tft.color565(r, g, b);
+    }
+}
+
+static void initAllPalettes() {
+    initIronbowPalette();
+    initWhiteHotPalette();
+    initRainbowPalette();
+    activePalette = ironbowPalette;
+}
+
+// Temperature unit conversion helpers
+static float convertTemp(float tempC, TempUnit unit) {
+    if (unit == TEMP_UNIT_KELVIN) {
+        return tempC + 273.15f;
+    }
+    return tempC;
+}
+
+static const char* getTempUnitSymbol(TempUnit unit) {
+    return (unit == TEMP_UNIT_KELVIN) ? "K" : "C";
+}
+
+static const char* getTempUnitName(TempUnit unit) {
+    return (unit == TEMP_UNIT_KELVIN) ? "Kelvin" : "Celsius";
+}
+
+// Runtime display settings mutators
+void updateCameraRotation(int rotation) {
+    recomputeBilinearTables(rotation);
+}
+
+void updateTempUnit(TempUnit unit) {
+    currentTempUnit = unit;
+}
+
+void updatePalette(PaletteType palette) {
+    currentPaletteType = palette;
+    if (palette == PALETTE_WHITE_HOT) {
+        activePalette = whiteHotPalette;
+    } else if (palette == PALETTE_RAINBOW) {
+        activePalette = rainbowPalette;
+    } else {
+        activePalette = ironbowPalette;
+    }
+}
+
+void updateMirror(bool mirror) {
+    currentMirrorFeed = mirror;
 }
 
 // Live telemetry variables for continuous serial reporting
@@ -281,9 +378,9 @@ bool initDisplay() {
 
     canvas->fillScreen(ILI9341_BLACK);
 
-    // Precompute bilinear scaling tables and color palette
-    initBilinearTables();
-    initIronbowPalette();
+    // Precompute bilinear scaling tables and initialize all thermal palettes
+    recomputeBilinearTables(currentCameraRotation);
+    initAllPalettes();
 
     Serial.println("[TFT] ILI9341 display initialized successfully!");
     return (globalDeviceStatus == STATUS_OK);
@@ -359,6 +456,8 @@ void displayTask(void *pvParameters) {
     float currentFps = 0.0f;
     uint32_t lastDisplayPoll = 0;
     int displayFailCount = 0;
+    bool menuNeedsRedraw = true;
+    AppState prevAppState = getAppState();
 
     while (true) {
         uint32_t now = millis();
@@ -383,6 +482,7 @@ void displayTask(void *pvParameters) {
                     tft.begin(TFT_SPI_FREQ);
                     tft.setRotation(DISPLAY_ROTATION);
                     tft.fillScreen(ILI9341_BLACK);
+                    menuNeedsRedraw = true;
                 }
                 displayFailCount = 0;
                 globalDeviceStatus = STATUS_OK;
@@ -396,24 +496,55 @@ void displayTask(void *pvParameters) {
             continue;
         }
 
-        // If sensor is disconnected or failed, show on-screen error card
-        if (globalSensorStatus != SENSOR_OK) {
-            renderSensorErrorScreen(sensorReconnectAttempts);
-            vTaskDelay(pdMS_TO_TICKS(200));
+        // 2. Poll rotary encoder events and update UI state
+        EncoderEventType evt;
+        bool uiChanged = false;
+        while (getEncoderEvent(evt, 0)) {
+            if (processUIInput(evt)) {
+                uiChanged = true;
+            }
+        }
+        AppState currentAppState = getAppState();
+        if (currentAppState != prevAppState) {
+            menuNeedsRedraw = true;
+            prevAppState = currentAppState;
+        }
+
+        // 3. Render according to active UI State
+        if (currentAppState != APP_STATE_THERMAL_VIEW) {
+            // Render Main Menu or Settings page
+            if (uiChanged || menuNeedsRedraw) {
+                renderCurrentUI(canvas);
+                tft.startWrite();
+                tft.setAddrWindow(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+                tft.writePixels(canvas->getBuffer(), DISPLAY_WIDTH * DISPLAY_HEIGHT);
+                tft.endWrite();
+                menuNeedsRedraw = false;
+            }
+            // Wait for next encoder event or periodic check (timeout 50ms)
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50));
             continue;
         }
 
-        // Wait for frame notification from sensor task with 500ms timeout
-        uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));
-        // If no notif received within timeout, loop to check sensor status
+        // --- APP_STATE_THERMAL_VIEW (Live Sensor View) ---
+        // If sensor is disconnected or failed, show on-screen error card
+        if (globalSensorStatus != SENSOR_OK) {
+            renderSensorErrorScreen(sensorReconnectAttempts);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+        // Wait for frame notification from sensor task (or wake-up from encoder)
+        uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50));
+        // If no notif received within timeout, loop to check encoder / connection
         if (notified == 0) 
             continue;
+
         // Fetch latest frame from thread-safe double buffer
         if (!getLatestThermalFrame(currentFrame)) 
             continue;
 
-        // Rotate thermal frame to configured orientation
-        rotateSensorFrame(currentFrame.temperatures, rotatedGrid, CAMERA_ROTATION);
+        // Rotate thermal frame to configured orientation and mirror settings
+        rotateSensorFrame(currentFrame.temperatures, rotatedGrid, currentCameraRotation, currentMirrorFeed);
 
         // Smooth min/max to prevent flickering
         smoothedMin += 0.25f * (currentFrame.minTemp - smoothedMin);
@@ -455,7 +586,7 @@ void displayTask(void *pvParameters) {
                 if (idx < 0) idx = 0;
                 else if (idx > 255) idx = 255;
 
-                destRow[x] = ironbowPalette[idx];
+                destRow[x] = activePalette[idx];
             }
         }
 
@@ -496,24 +627,24 @@ void displayTask(void *pvParameters) {
             canvas->print("CENTER");
             canvas->setTextSize(2);
             canvas->setCursor(4, 46);
-            canvas->printf("%.1f", currentFrame.centerTemp);
+            canvas->printf("%.1f", convertTemp(currentFrame.centerTemp, currentTempUnit));
             canvas->setTextSize(1);
             canvas->setCursor(4, 66);
-            canvas->print("Celsius");
+            canvas->print(getTempUnitName(currentTempUnit));
 
             canvas->setTextColor(ILI9341_CYAN);
             canvas->setCursor(4, 105);
             canvas->print("MIN TEMP");
             canvas->setTextSize(1);
             canvas->setCursor(4, 118);
-            canvas->printf("%.1f C", currentFrame.minTemp);
+            canvas->printf("%.1f %s", convertTemp(currentFrame.minTemp, currentTempUnit), getTempUnitSymbol(currentTempUnit));
 
             canvas->setTextColor(ILI9341_ORANGE);
             canvas->setCursor(4, 145);
             canvas->print("MAX TEMP");
             canvas->setTextSize(1);
             canvas->setCursor(4, 158);
-            canvas->printf("%.1f C", currentFrame.maxTemp);
+            canvas->printf("%.1f %s", convertTemp(currentFrame.maxTemp, currentTempUnit), getTempUnitSymbol(currentTempUnit));
 
             // Right panel: FPS and Vertical Color Bar
             canvas->setTextColor(ILI9341_GREEN);
@@ -527,14 +658,14 @@ void displayTask(void *pvParameters) {
             int barH = 165;
             for (int h = 0; h < barH; ++h) {
                 int palIdx = 255 - (h * 255) / (barH - 1);
-                canvas->drawFastHLine(barX, barY + h, barW, ironbowPalette[palIdx]);
+                canvas->drawFastHLine(barX, barY + h, barW, activePalette[palIdx]);
             }
             canvas->drawRect(barX - 1, barY - 1, barW + 2, barH + 2, ILI9341_WHITE);
             canvas->setTextColor(ILI9341_WHITE);
             canvas->setCursor(287, barY + 2);
-            canvas->printf("%.0f", smoothedMax);
+            canvas->printf("%.0f", convertTemp(smoothedMax, currentTempUnit));
             canvas->setCursor(287, barY + barH - 8);
-            canvas->printf("%.0f", smoothedMin);
+            canvas->printf("%.0f", convertTemp(smoothedMin, currentTempUnit));
 
         } else {
             // --- FULLSCREEN BADGE OVERLAYS ---
@@ -543,16 +674,16 @@ void displayTask(void *pvParameters) {
             canvas->setTextColor(ILI9341_WHITE);
             canvas->setTextSize(1);
             canvas->setCursor(cx - 47, 9);
-            canvas->printf("+ %.1f C", currentFrame.centerTemp);
+            canvas->printf("+ %.1f %s", convertTemp(currentFrame.centerTemp, currentTempUnit), getTempUnitSymbol(currentTempUnit));
 
             canvas->fillRect(4, DISPLAY_HEIGHT - 22, 160, 18, ILI9341_BLACK);
             canvas->drawRect(4, DISPLAY_HEIGHT - 22, 160, 18, ILI9341_WHITE);
             canvas->setTextColor(ILI9341_CYAN);
             canvas->setCursor(8, DISPLAY_HEIGHT - 17);
-            canvas->printf("Min:%.1f", currentFrame.minTemp);
+            canvas->printf("Min:%.1f", convertTemp(currentFrame.minTemp, currentTempUnit));
             canvas->setTextColor(ILI9341_ORANGE);
             canvas->setCursor(85, DISPLAY_HEIGHT - 17);
-            canvas->printf("Max:%.1f C", currentFrame.maxTemp);
+            canvas->printf("Max:%.1f %s", convertTemp(currentFrame.maxTemp, currentTempUnit), getTempUnitSymbol(currentTempUnit));
 
             canvas->fillRect(DISPLAY_WIDTH - 80, 4, 76, 18, ILI9341_BLACK);
             canvas->drawRect(DISPLAY_WIDTH - 80, 4, 76, 18, ILI9341_GREEN);
