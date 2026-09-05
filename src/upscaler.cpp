@@ -105,6 +105,20 @@ void ThermalUpscaler::reconfigureViewport(int vpW, int vpH, int gridW, int gridH
 
     reset();
 
+    // 0. Precompute Nearest Neighbor Tables
+    for (int x = 0; x < vpW; ++x) {
+        int gx = (int)((float)x * (float)gridW / (float)vpW);
+        if (gx < 0) gx = 0;
+        if (gx > gridW - 1) gx = gridW - 1;
+        m_colNNTable[x] = (uint8_t)gx;
+    }
+    for (int y = 0; y < vpH; ++y) {
+        int gy = (int)((float)y * (float)gridH / (float)vpH);
+        if (gy < 0) gy = 0;
+        if (gy > gridH - 1) gy = gridH - 1;
+        m_rowNNTable[y] = (uint8_t)gy;
+    }
+
     // 1. Precompute Bilinear Tables
     for (int x = 0; x < vpW; ++x) {
         float u = (float)x * (float)(gridW - 1) / (float)(vpW - 1);
@@ -247,6 +261,11 @@ void ThermalUpscaler::render(
     float taauSharpness
 ) {
     switch (mode) {
+        case SCALING_NEAREST:
+            renderNearest(lowGrid, canvasBuf, vpX, vpY, vpW, vpH, canvasW,
+                          smoothedMin, invRange, palette);
+            break;
+
         case SCALING_BILINEAR:
             renderBilinear(lowGrid, canvasBuf, vpX, vpY, vpW, vpH, canvasW,
                            smoothedMin, invRange, palette);
@@ -267,6 +286,33 @@ void ThermalUpscaler::render(
             renderTAAU(lowGrid, canvasBuf, vpX, vpY, vpW, vpH, canvasW,
                        smoothedMin, invRange, palette, taauAlpha, taauSharpness);
             break;
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 0. Nearest Neighbor Interpolation
+// -----------------------------------------------------------------------------
+void ThermalUpscaler::renderNearest(
+    const float* lowGrid,
+    uint16_t* canvasBuf,
+    int vpX, int vpY, int vpW, int vpH, int canvasW,
+    float smoothedMin, float invRange, const uint16_t* palette
+) {
+    for (int y = 0; y < vpH; ++y) {
+        uint8_t gy = m_rowNNTable[y];
+        const float* row = &lowGrid[gy * m_gridW];
+        uint16_t* destRow = &canvasBuf[(vpY + y) * canvasW + vpX];
+
+        for (int x = 0; x < vpW; ++x) {
+            uint8_t gx = m_colNNTable[x];
+            float temp = row[gx];
+
+            int idx = (int)((temp - smoothedMin) * invRange);
+            if (idx < 0) idx = 0;
+            else if (idx > 255) idx = 255;
+
+            destRow[x] = palette[idx];
+        }
     }
 }
 

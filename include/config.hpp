@@ -87,7 +87,7 @@
 
 #define DISPLAY_TASK_CORE    1
 #define DISPLAY_TASK_PRIO    2
-#define DISPLAY_TASK_STACK   8192
+#define DISPLAY_TASK_STACK   12288
 
 #define LED_TASK_CORE        0
 #define LED_TASK_PRIO        1

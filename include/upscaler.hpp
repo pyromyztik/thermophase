@@ -101,6 +101,10 @@ private:
     LanczosInterp m_colLanczosTable[DISPLAY_WIDTH];
     LanczosInterp m_rowLanczosTable[DISPLAY_HEIGHT];
 
+    // 1D Nearest Neighbor precomputed tables
+    uint8_t m_colNNTable[DISPLAY_WIDTH];
+    uint8_t m_rowNNTable[DISPLAY_HEIGHT];
+
     // 1D Bilinear precomputed tables
     ColInterp m_colBilinearTable[DISPLAY_WIDTH];
     RowInterp m_rowBilinearTable[DISPLAY_HEIGHT];
@@ -121,6 +125,12 @@ private:
 
 
     // Rendering implementations
+    void renderNearest(
+        const float* lowGrid,
+        uint16_t* canvasBuf,
+        int vpX, int vpY, int vpW, int vpH, int canvasW,
+        float smoothedMin, float invRange, const uint16_t* palette
+    );
     void renderBilinear(
         const float* lowGrid,
         uint16_t* canvasBuf,

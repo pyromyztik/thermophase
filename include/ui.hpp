@@ -1,19 +1,23 @@
 #pragma once
 #include <Arduino.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_ILI9341.h>
+#include <lvgl.h>
+#include "config.hpp"
 #include "encoder.hpp"
 
 // Application UI States
 enum AppState {
-    APP_STATE_THERMAL_VIEW = 0, // Live sensor view with HUD/OSD overlays (boot default)
+    APP_STATE_BOOT = 0,         // Initial system boot screen
+    APP_STATE_THERMAL_VIEW,     // Live sensor view with HUD/OSD overlays (default operating state)
     APP_STATE_MAIN_MENU,        // Main menu navigation screen
-    APP_STATE_SETTINGS          // Settings & configuration page
+    APP_STATE_SETTINGS,         // Settings & configuration screen
+    APP_STATE_SCALING_MENU,     // Dedicated scaling / interpolation mode select screen
+    APP_STATE_SENSOR_ERROR      // Hardware disconnected / sensor error screen
 };
 
 // Temperature Unit Options
 enum TempUnit {
     TEMP_UNIT_CELSIUS = 0,
+    TEMP_UNIT_FAHRENHEIT,
     TEMP_UNIT_KELVIN
 };
 
@@ -26,35 +30,81 @@ enum PaletteType {
 
 // Scaling Mode Options
 enum ScalingMode {
-    SCALING_BILINEAR = 0,
+    SCALING_NEAREST = 0,
+    SCALING_BILINEAR,
     SCALING_BICUBIC,
     SCALING_LANCZOS,
     SCALING_TAAU
 };
 
+// UTF-8 Degree Symbol
+#define UI_SYMBOL_DEGREE     "\xC2\xB0"
 
-// Minimalist Theme Colors
-#define UI_BG_COLOR         ILI9341_BLACK
-#define UI_BORDER_COLOR     ILI9341_WHITE
-#define UI_TEXT_COLOR       ILI9341_WHITE
-#define UI_ACCENT_COLOR     ILI9341_RED      // User-selected Red accent
-#define UI_SEPARATOR_COLOR  0x7BEF           // Crisp medium-grey horizontal divider
+// Minimalist Dark Theme Colors (matching original OLED aesthetic)
+#define UI_COLOR_BG          lv_color_hex(0x000000)
+#define UI_COLOR_BORDER      lv_color_hex(0xFFFFFF)
+#define UI_COLOR_TEXT        lv_color_hex(0xFFFFFF)
+#define UI_COLOR_TEXT_DIM    lv_color_hex(0xBDC3C7)
+#define UI_COLOR_ACCENT      lv_color_hex(0xFF1E27)   // Vivid Red accent
+#define UI_COLOR_ACCENT_DIM  lv_color_hex(0x8B0000)   // Deep Red for subtle glows
+#define UI_COLOR_FOCUS_GREY  lv_color_hex(0x404040)   // Dark grey highlight for focused items
+#define UI_COLOR_SEPARATOR   lv_color_hex(0x4A4A4A)   // Crisp gray horizontal divider
+#define UI_COLOR_CYAN        lv_color_hex(0x00E5FF)   // Min temp readout
+#define UI_COLOR_ORANGE      lv_color_hex(0xFF9100)   // Max temp readout
+#define UI_COLOR_GREEN       lv_color_hex(0x00E676)   // FPS readout
+#define UI_COLOR_YELLOW      lv_color_hex(0xFFD600)   // Thermal header readout
 
-// Initializes UI state machine variables
+// Screen objects
+extern lv_obj_t* screen_boot;
+extern lv_obj_t* screen_thermal;
+extern lv_obj_t* screen_main_menu;
+extern lv_obj_t* screen_settings;
+extern lv_obj_t* screen_scaling;
+extern lv_obj_t* screen_error;
+
+// Global LVGL encoder navigation group
+extern lv_group_t* ui_encoder_group;
+
+// Initializes LVGL styles, screens, groups and starts in boot screen state
 void initUI();
 
 // Returns the current UI state
 AppState getAppState();
 
-// Transition to a new UI state
+// Direct state transition
 void setAppState(AppState newState);
 
-// Handle an encoder input event (rotation or click)
-// Returns true if the state or menu selection changed and screen needs redrawing
-bool processUIInput(EncoderEventType event);
+// Navigation transitions with animations
+void uiNavToThermal();
+void uiNavToMainMenu();
+void uiNavToSettings(int focusIndex = 0);
+void uiNavToScalingMenu();
+void uiNavToSensorError(uint32_t attemptCount);
+void uiDismissSensorError();
 
-// Render the active menu/settings screen into the offscreen canvas
-void renderCurrentUI(GFXcanvas16* canvas);
+// Boot Screen updater
+void updateBootScreenUI(const char* statusText, uint8_t progressPercent);
+
+// Thermal HUD & Overlay updater
+void updateThermalHUD(
+    float centerTemp,
+    float minTemp,
+    float maxTemp,
+    float fps,
+    ScalingMode mode,
+    TempUnit unit,
+    const uint16_t* activePalette,
+    int vpX,
+    int vpY,
+    int vpW,
+    int vpH
+);
+
+// Thermal feed image descriptor accessor
+lv_obj_t* getThermalImageObj();
+
+// Process encoder events for UI navigation
+bool processUIInput(EncoderEventType event);
 
 // Runtime Settings Accessors
 int getCameraRotationSetting();
@@ -62,4 +112,3 @@ TempUnit getTempUnitSetting();
 PaletteType getPaletteSetting();
 bool getMirrorSetting();
 ScalingMode getScalingModeSetting();
-

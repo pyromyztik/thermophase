@@ -57,8 +57,7 @@ void setup() {
         LED_TASK_CORE
     );
 
-    // 4. Initialize UI State Machine (starts in live thermal view)
-    initUI();
+    // 4. HW-040 Rotary Encoder (GPIO 4, 5, 6)
 
     // 5. Initialize HW-040 Rotary Encoder (GPIO 4, 5, 6)
     if (!initEncoder()) {
