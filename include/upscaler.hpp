@@ -18,13 +18,11 @@ struct CubicInterp {
     float w2;
     float w3;
 };
-
 // Precomputed 1D Lanczos-3 interpolation weights (6 taps)
 struct LanczosInterp {
     int idx[6];
     float w[6];
 };
-
 // Precomputed horizontal history warp coordinates for TAAU
 struct WarpColInterp {
     int hx0;
@@ -129,21 +127,18 @@ private:
         int vpX, int vpY, int vpW, int vpH, int canvasW,
         float smoothedMin, float invRange, const uint16_t* palette
     );
-
     void renderBicubic(
         const float* lowGrid,
         uint16_t* canvasBuf,
         int vpX, int vpY, int vpW, int vpH, int canvasW,
         float smoothedMin, float invRange, const uint16_t* palette
     );
-
     void renderLanczos(
         const float* lowGrid,
         uint16_t* canvasBuf,
         int vpX, int vpY, int vpW, int vpH, int canvasW,
         float smoothedMin, float invRange, const uint16_t* palette
     );
-
     void renderTAAU(
         const float* lowGrid,
         uint16_t* canvasBuf,
@@ -151,7 +146,6 @@ private:
         float smoothedMin, float invRange, const uint16_t* palette,
         float alpha, float sharpness
     );
-
     // TAAU helper functions
     void estimateMotion(
         const float* curLow,
@@ -159,7 +153,6 @@ private:
         int w, int h,
         float& outDx, float& outDy
     );
-
     void computeNeighborhoodMinMax(
         const float* lowGrid,
         int w, int h,

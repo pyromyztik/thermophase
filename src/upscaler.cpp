@@ -8,7 +8,6 @@ static inline float sinc(float x) {
     float px = 3.14159265358979323846f * x;
     return std::sin(px) / px;
 }
-
 static inline float lanczos3Weight(float x) {
     float ax = std::abs(x);
     if (ax >= 3.0f) return 0.0f;
@@ -65,27 +64,23 @@ bool ThermalUpscaler::init(int maxW, int maxH) {
         Serial.println("[UPSCALER] Warning: PSRAM allocation failed for HistA, trying internal RAM...");
         m_histA = (float*)malloc(histBytes);
     }
-
     m_histB = (float*)heap_caps_malloc(histBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (m_histB == nullptr) {
         Serial.println("[UPSCALER] Warning: PSRAM allocation failed for HistB, trying internal RAM...");
         m_histB = (float*)malloc(histBytes);
     }
-
     // Allocate separable intermediate rows (32 rows x 320 cols = 40 KB)
     // Internal RAM preferred for single-cycle row staging
     size_t interBytes = 32 * m_maxW * sizeof(float);
     m_intermediateRows = (float*)heap_caps_malloc(interBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (m_intermediateRows == nullptr) {
+    if (m_intermediateRows == nullptr) 
         m_intermediateRows = (float*)malloc(interBytes);
-    }
 
     if (m_histA == nullptr || m_histB == nullptr || m_intermediateRows == nullptr) {
         Serial.printf("[UPSCALER] ERROR: Failed to allocate scaling buffers! (A=%p, B=%p, Inter=%p)\n",
                       m_histA, m_histB, m_intermediateRows);
         return false;
     }
-
     m_histRead = m_histA;
     m_histWrite = m_histB;
     m_historyValid = false;
@@ -109,7 +104,6 @@ void ThermalUpscaler::reconfigureViewport(int vpW, int vpH, int gridW, int gridH
     m_cachedMinY1 = -1;
 
     reset();
-
 
     // 1. Precompute Bilinear Tables
     for (int x = 0; x < vpW; ++x) {
@@ -198,7 +192,6 @@ void ThermalUpscaler::reconfigureViewport(int vpW, int vpH, int gridW, int gridH
             m_colLanczosTable[x].w[tapIdx] = weight;
             sumW += weight;
         }
-
         // Normalize weights to 1.0 for unit gain
         if (std::abs(sumW) > 1e-5f) {
             for (int k = 0; k < 6; ++k) {
@@ -228,12 +221,10 @@ void ThermalUpscaler::reconfigureViewport(int vpW, int vpH, int gridW, int gridH
         }
 
         if (std::abs(sumW) > 1e-5f) {
-            for (int k = 0; k < 6; ++k) {
+            for (int k = 0; k < 6; ++k) 
                 m_rowLanczosTable[y].w[k] /= sumW;
-            }
         }
     }
-
     Serial.printf("[UPSCALER] Reconfigured Viewport: %dx%d from Grid %dx%d\n",
                   m_vpW, m_vpH, m_gridW, m_gridH);
 }
@@ -339,7 +330,6 @@ void ThermalUpscaler::renderBicubic(
                         c.w2 * srcRow[c.idx2] + c.w3 * srcRow[c.idx3];
         }
     }
-
     // Vertical evaluation & direct palette mapping
     for (int y = 0; y < vpH; ++y) {
         const CubicInterp& rCubic = m_rowCubicTable[y];
@@ -386,7 +376,6 @@ void ThermalUpscaler::renderLanczos(
                         c.w[4] * srcRow[c.idx[4]] + c.w[5] * srcRow[c.idx[5]];
         }
     }
-
     // Vertical evaluation & direct palette mapping
     for (int y = 0; y < vpH; ++y) {
         const LanczosInterp& r = m_rowLanczosTable[y];
@@ -442,7 +431,6 @@ void ThermalUpscaler::computeNeighborhoodMinMax(
                     if (val > localMax) localMax = val;
                 }
             }
-
             int idx = y * w + x;
             outMin[idx] = localMin;
             outMax[idx] = localMax;
@@ -488,7 +476,6 @@ void ThermalUpscaler::estimateMotion(
             }
         }
     }
-
     float deltaU = 0.0f;
     if (bestU > 0 && bestU < 4) {
         float eLeft  = ssd[bestV][bestU - 1];
@@ -501,7 +488,6 @@ void ThermalUpscaler::estimateMotion(
             else if (deltaU > 0.5f) deltaU = 0.5f;
         }
     }
-
     float deltaV = 0.0f;
     if (bestV > 0 && bestV < 4) {
         float eTop = ssd[bestV - 1][bestU];
@@ -514,7 +500,6 @@ void ThermalUpscaler::estimateMotion(
             else if (deltaV > 0.5f) deltaV = 0.5f;
         }
     }
-
     float dx = (float)(bestU - 2) + deltaU;
     float dy = (float)(bestV - 2) + deltaV;
 
@@ -552,7 +537,6 @@ void ThermalUpscaler::renderTAAU(
     if (m_historyValid) {
         estimateMotion(cleanGrid, m_prevLow, m_gridW, m_gridH, dx, dy);
     }
-
     float scaleX = (float)(vpW - 1) / (float)(m_gridW - 1);
     float scaleY = (float)(vpH - 1) / (float)(m_gridH - 1);
     float dxHigh = dx * scaleX;
@@ -576,7 +560,6 @@ void ThermalUpscaler::renderTAAU(
                         c.w2 * srcRow[c.idx2] + c.w3 * srcRow[c.idx3];
         }
     }
-
     // Reset bounding box row caches
     m_cachedMinY0 = -1;
     m_cachedMinY1 = -1;
@@ -691,7 +674,6 @@ void ThermalUpscaler::renderTAAU(
             sharpenAndOutputRow(y - 1);
         }
     }
-
     // Output final row
     sharpenAndOutputRow(vpH - 1);
 
