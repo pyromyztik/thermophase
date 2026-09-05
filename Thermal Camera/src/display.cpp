@@ -1,10 +1,15 @@
 #include "display.hpp"
+#include "upscaler.hpp"
 
 // Hardware SPI TFT instance
 Adafruit_ILI9341 tft = Adafruit_ILI9341(&SPI, TFT_DC, TFT_CS, TFT_RST);
 
 // Double-buffer canvas allocated in PSRAM/heap during initDisplay()
 static GFXcanvas16* canvas = nullptr;
+
+// Multi-mode thermal upscaling engine (Bilinear, Bicubic, Lanczos, TAAU)
+static ThermalUpscaler upscaler;
+
 
 // Bilinear interpolation precomputed tables
 static ColInterp colTable[DISPLAY_WIDTH];
@@ -26,6 +31,8 @@ static int currentCameraRotation = CAMERA_ROTATION;
 static bool currentMirrorFeed = MIRROR_HORIZONTAL;
 static TempUnit currentTempUnit = TEMP_UNIT_CELSIUS;
 static PaletteType currentPaletteType = PALETTE_IRONBOW;
+static ScalingMode currentScalingMode = SCALING_BICUBIC;
+
 
 // 256-color thermal palettes
 static uint16_t ironbowPalette[256];
@@ -129,9 +136,14 @@ static void recomputeBilinearTables(int rotation) {
         canvas->fillScreen(ILI9341_BLACK);
     }
 
+    // Reconfigure multi-mode upscaler engine viewport
+    upscaler.reconfigureViewport(vpW, vpH, gridW, gridH);
+
     Serial.printf("[TFT] Recomputed Viewport: %dx%d at (%d,%d), Grid: %dx%d, Rotation: %d\n",
                   vpW, vpH, vpX, vpY, gridW, gridH, currentCameraRotation);
 }
+
+
 
 // Generate Ironbow (FLIR-style) 256-color RGB565 palette
 static void initIronbowPalette() {
@@ -257,7 +269,19 @@ void updatePalette(PaletteType palette) {
 }
 void updateMirror(bool mirror) {
     currentMirrorFeed = mirror;
+    upscaler.reset();
 }
+void updateScalingMode(ScalingMode mode) {
+    currentScalingMode = mode;
+    upscaler.reset();
+    const char* modeNames[4] = {"Bilinear", "Bicubic", "Lanczos", "TAAU"};
+    Serial.printf("[TFT] Scaling mode updated to: %s\n", modeNames[mode % 4]);
+}
+ScalingMode getScalingMode() {
+    return currentScalingMode;
+}
+
+
 
 // Live telemetry variables for continuous serial reporting
 volatile float displayFps = 0.0f;
@@ -437,9 +461,16 @@ bool initDisplay() {
 
     canvas->fillScreen(ILI9341_BLACK);
 
+    // Initialize multi-mode upscaler engine (Bilinear, Bicubic, Lanczos, TAAU)
+    if (!upscaler.init(DISPLAY_WIDTH, DISPLAY_HEIGHT)) {
+        Serial.println("[TFT] Warning: Failed to allocate full Upscaler PSRAM buffers!");
+    }
+
     // Precompute bilinear scaling tables and initialize all thermal palettes
+
     recomputeBilinearTables(currentCameraRotation);
     initAllPalettes();
+
 
     // Display initial Boot Screen and turn on backlight safely
     showBootScreen("Starting System...", 15);
@@ -631,35 +662,24 @@ void displayTask(void *pvParameters) {
         }
         uint16_t* cBuf = canvas->getBuffer();
 
-        // Bilinear interpolation directly into the offscreen canvas memory
-        for (int y = 0; y < vpH; ++y) {
-            uint8_t y0 = rowTable[y].y0;
-            uint8_t y1 = rowTable[y].y1;
-            float fy = rowTable[y].fy;
-            float omfy = 1.0f - fy;
+        // Multi-mode thermal upscaling (Bilinear, Bicubic, Lanczos, TAAU)
+        upscaler.render(
+            currentScalingMode,
+            rotatedGrid,
+            gridW,
+            gridH,
+            cBuf,
+            vpX,
+            vpY,
+            vpW,
+            vpH,
+            DISPLAY_WIDTH,
+            smoothedMin,
+            invRange,
+            activePalette
+        );
 
-            const float* r0 = &rotatedGrid[y0 * gridW];
-            const float* r1 = &rotatedGrid[y1 * gridW];
 
-            uint16_t* destRow = &cBuf[(vpY + y) * DISPLAY_WIDTH + vpX];
-
-            for (int x = 0; x < vpW; ++x) {
-                uint8_t x0 = colTable[x].x0;
-                uint8_t x1 = colTable[x].x1;
-                float fx = colTable[x].fx;
-
-                // Bilinear formula: interpolate horizontal then vertical
-                float top = r0[x0] + fx * (r0[x1] - r0[x0]);
-                float bot = r1[x0] + fx * (r1[x1] - r1[x0]);
-                float temp = omfy * top + fy * bot;
-
-                int idx = (int)((temp - smoothedMin) * invRange);
-                if (idx < 0) idx = 0;
-                else if (idx > 255) idx = 255;
-
-                destRow[x] = activePalette[idx];
-            }
-        }
 
         // Calculate real-time display FPS
         frameCount++;
@@ -717,11 +737,15 @@ void displayTask(void *pvParameters) {
             canvas->setCursor(4, 158);
             canvas->printf("%.1f %s", convertTemp(currentFrame.maxTemp, currentTempUnit), getTempUnitSymbol(currentTempUnit));
 
-            // Right panel: FPS and Vertical Color Bar
+            // Right panel: FPS, Scaling Mode, and Vertical Color Bar
             canvas->setTextColor(ILI9341_GREEN);
             canvas->setTextSize(1);
             canvas->setCursor(256, 10);
             canvas->printf("%.1f FPS", currentFps);
+            canvas->setTextColor(0xBDF7);
+            canvas->setCursor(256, 21);
+            const char* modeNames[4] = {"BILIN", "BICUB", "LANCZ", "TAAU"};
+            canvas->print(modeNames[currentScalingMode % 4]);
 
             int barX = 265;
             int barY = 32;
@@ -756,12 +780,14 @@ void displayTask(void *pvParameters) {
             canvas->setCursor(85, DISPLAY_HEIGHT - 17);
             canvas->printf("Max:%.1f %s", convertTemp(currentFrame.maxTemp, currentTempUnit), getTempUnitSymbol(currentTempUnit));
 
-            canvas->fillRect(DISPLAY_WIDTH - 80, 4, 76, 18, ILI9341_BLACK);
-            canvas->drawRect(DISPLAY_WIDTH - 80, 4, 76, 18, ILI9341_GREEN);
+            const char* modeBadges[4] = {"BIL", "CUB", "LAN", "TAU"};
+            canvas->fillRect(DISPLAY_WIDTH - 84, 4, 80, 18, ILI9341_BLACK);
+            canvas->drawRect(DISPLAY_WIDTH - 84, 4, 80, 18, ILI9341_GREEN);
             canvas->setTextColor(ILI9341_GREEN);
-            canvas->setCursor(DISPLAY_WIDTH - 73, 9);
-            canvas->printf("FPS: %.1f", currentFps);
+            canvas->setCursor(DISPLAY_WIDTH - 79, 9);
+            canvas->printf("%.1f %s", currentFps, modeBadges[currentScalingMode % 4]);
         }
+
         // Push the entire composite frame to the ILI9341 display in ONE continuous SPI burst
         tft.startWrite();
         tft.setAddrWindow(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT);

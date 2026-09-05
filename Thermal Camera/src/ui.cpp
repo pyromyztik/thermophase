@@ -11,6 +11,7 @@ static int currentRotationSetting = CAMERA_ROTATION;
 static TempUnit currentTempUnitSetting = TEMP_UNIT_CELSIUS;
 static PaletteType currentPaletteSetting = PALETTE_IRONBOW;
 static bool currentMirrorSetting = MIRROR_HORIZONTAL;
+static ScalingMode currentScalingSetting = SCALING_BICUBIC;
 
 // Main Menu items
 static const char* mainMenuLabels[] = {
@@ -27,6 +28,7 @@ static const char* settingsLabels[] = {
     "Temp Unit",
     "Color Palette",
     "Mirror Feed",
+    "Upscaling",
     "< Back to Main Menu"
 };
 static const int SETTINGS_COUNT = sizeof(settingsLabels) / sizeof(settingsLabels[0]);
@@ -40,6 +42,8 @@ void initUI() {
     currentTempUnitSetting = TEMP_UNIT_CELSIUS;
     currentPaletteSetting = PALETTE_IRONBOW;
     currentMirrorSetting = MIRROR_HORIZONTAL;
+    currentScalingSetting = SCALING_BICUBIC;
+
     Serial.println("[UI] UI State Machine initialized to APP_STATE_THERMAL_VIEW.");
 }
 
@@ -64,6 +68,10 @@ PaletteType getPaletteSetting() {
 bool getMirrorSetting() {
     return currentMirrorSetting;
 }
+ScalingMode getScalingModeSetting() {
+    return currentScalingSetting;
+}
+
 
 bool processUIInput(EncoderEventType event) {
     if (event == ENCODER_EVENT_NONE) {
@@ -142,7 +150,14 @@ bool processUIInput(EncoderEventType event) {
                         Serial.printf("[UI] Mirror updated to: %s\n", currentMirrorSetting ? "ON" : "OFF");
                         break;
 
-                    case 4: // < Back to Main Menu
+                    case 4: // Upscaling: Bilinear -> Bicubic -> Lanczos -> TAAU
+                        currentScalingSetting = (ScalingMode)((currentScalingSetting + 1) % 4);
+                        updateScalingMode(currentScalingSetting);
+                        Serial.printf("[UI] Scaling updated to mode %d\n", (int)currentScalingSetting);
+                        break;
+
+
+                    case 5: // < Back to Main Menu
                         currentAppState = APP_STATE_MAIN_MENU;
                         Serial.println("[UI] Settings: Returning to APP_STATE_MAIN_MENU");
                         break;
@@ -225,27 +240,39 @@ void renderCurrentUI(GFXcanvas16* canvas) {
     } else if (currentAppState == APP_STATE_SETTINGS) {
         drawHeader(canvas, "SETTINGS");
 
+        const int ITEMS_PER_PAGE = 5;
+        int totalPages = (SETTINGS_COUNT + ITEMS_PER_PAGE - 1) / ITEMS_PER_PAGE;
+        int currentPage = settingsIndex / ITEMS_PER_PAGE;
+        int pageStartIndex = currentPage * ITEMS_PER_PAGE;
+        int pageEndIndex = (pageStartIndex + ITEMS_PER_PAGE < SETTINGS_COUNT) 
+                         ? (pageStartIndex + ITEMS_PER_PAGE) : SETTINGS_COUNT;
+        int itemsOnPage = pageEndIndex - pageStartIndex;
+
         int startY = 42;
         int itemHeight = 28;
-        int itemWidth = 280;
-        int itemX = 20;
+        int itemSpacing = 6;
+        int itemWidth = 268;
+        int itemX = 18;
 
         // Formatted value strings for settings
         const char* rotStrs[4] = {"0 deg", "90 deg", "180 deg", "270 deg"};
         const char* unitStrs[2] = {"Celsius (C)", "Kelvin (K)"};
         const char* palStrs[3] = {"Ironbow", "White-Hot", "Rainbow"};
         const char* mirStrs[2] = {"OFF", "ON"};
+        const char* scaleStrs[4] = {"Bilinear", "Bicubic", "Lanczos", "TAAU"};
 
         const char* valStrings[SETTINGS_COUNT] = {
             rotStrs[currentRotationSetting % 4],
             unitStrs[currentTempUnitSetting % 2],
             palStrs[currentPaletteSetting % 3],
             mirStrs[currentMirrorSetting ? 1 : 0],
+            scaleStrs[currentScalingSetting % 4],
             nullptr // Back option has no value column
         };
 
-        for (int i = 0; i < SETTINGS_COUNT; ++i) {
-            int y = startY + i * (itemHeight + 6);
+        for (int slot = 0; slot < itemsOnPage; ++slot) {
+            int i = pageStartIndex + slot;
+            int y = startY + slot * (itemHeight + itemSpacing);
             bool isSelected = (i == settingsIndex);
             int textY = y + 10;
 
@@ -268,7 +295,7 @@ void renderCurrentUI(GFXcanvas16* canvas) {
                 // Red value text
                 if (valStrings[i] != nullptr) {
                     canvas->setTextColor(UI_ACCENT_COLOR);
-                    canvas->setCursor(itemX + 165, textY);
+                    canvas->setCursor(itemX + 155, textY);
                     canvas->print(valStrings[i]);
                 }
             } else {
@@ -284,11 +311,34 @@ void renderCurrentUI(GFXcanvas16* canvas) {
                 // Dim white value text
                 if (valStrings[i] != nullptr) {
                     canvas->setTextColor(0xBDF7); // Soft light-grey
-                    canvas->setCursor(itemX + 165, textY);
+                    canvas->setCursor(itemX + 155, textY);
                     canvas->print(valStrings[i]);
                 }
             }
         }
+
+        // Draw side page indicator squares on the right (filled for current page, hollow for others)
+        if (totalPages > 1) {
+            int sqX = 298;
+            int sqSize = 8;
+            int sqGap = 6;
+            int totalIndHeight = totalPages * sqSize + (totalPages - 1) * sqGap;
+            int indStartY = 124 - (totalIndHeight / 2);
+
+            for (int p = 0; p < totalPages; ++p) {
+                int sqY = indStartY + p * (sqSize + sqGap);
+                if (p == currentPage) {
+                    // Active page: filled square with accent color
+                    canvas->fillRect(sqX, sqY, sqSize, sqSize, UI_ACCENT_COLOR);
+                    canvas->drawRect(sqX, sqY, sqSize, sqSize, UI_TEXT_COLOR);
+                } else {
+                    // Inactive page: unfilled square
+                    canvas->drawRect(sqX, sqY, sqSize, sqSize, UI_SEPARATOR_COLOR);
+                }
+            }
+        }
+
         drawFooter(canvas, "[Rotate] Navigate   |   [Click] Change / Back");
     }
 }
+

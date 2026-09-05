@@ -24,6 +24,15 @@ enum PaletteType {
     PALETTE_RAINBOW
 };
 
+// Scaling Mode Options
+enum ScalingMode {
+    SCALING_BILINEAR = 0,
+    SCALING_BICUBIC,
+    SCALING_LANCZOS,
+    SCALING_TAAU
+};
+
+
 // Minimalist Theme Colors
 #define UI_BG_COLOR         ILI9341_BLACK
 #define UI_BORDER_COLOR     ILI9341_WHITE
@@ -52,3 +61,5 @@ int getCameraRotationSetting();
 TempUnit getTempUnitSetting();
 PaletteType getPaletteSetting();
 bool getMirrorSetting();
+ScalingMode getScalingModeSetting();
+

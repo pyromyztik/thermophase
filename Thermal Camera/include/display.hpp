@@ -22,3 +22,6 @@ void updateCameraRotation(int rotation);
 void updateTempUnit(TempUnit unit);
 void updatePalette(PaletteType palette);
 void updateMirror(bool mirror);
+void updateScalingMode(ScalingMode mode);
+ScalingMode getScalingMode();
+
