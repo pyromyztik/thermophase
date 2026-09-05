@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include <lvgl.h>
 #include "config.hpp"
-#include "encoder.hpp"
+#include "wheel.hpp"
 
 // Application UI States
 enum AppState {
@@ -54,6 +54,16 @@ enum ScalingMode {
 #define UI_COLOR_GREEN       lv_color_hex(0x00E676)   // FPS readout
 #define UI_COLOR_YELLOW      lv_color_hex(0xFFD600)   // Thermal header readout
 
+// Shared UI Styles
+extern lv_style_t style_screen;
+extern lv_style_t style_header_title;
+extern lv_style_t style_divider;
+extern lv_style_t style_footer_text;
+extern lv_style_t style_btn_default;
+extern lv_style_t style_btn_focused;
+extern lv_style_t style_btn_pressed;
+extern lv_style_t style_btn_back_focused;
+
 // Screen objects
 extern lv_obj_t* screen_boot;
 extern lv_obj_t* screen_thermal;
@@ -62,19 +72,37 @@ extern lv_obj_t* screen_settings;
 extern lv_obj_t* screen_scaling;
 extern lv_obj_t* screen_error;
 
-// Global LVGL encoder navigation group
-extern lv_group_t* ui_encoder_group;
+// Screen item counts
+constexpr int MAIN_MENU_COUNT = 3;
+constexpr int SETTINGS_COUNT = 6;
+constexpr int SCALING_OPTIONS_COUNT = 6;
 
-// Initializes LVGL styles, screens, groups and starts in boot screen state
+// Shared Screen Widgets
+extern lv_obj_t* mainMenuBtns[MAIN_MENU_COUNT];
+extern lv_obj_t* mainMenuArrows[MAIN_MENU_COUNT];
+
+extern lv_obj_t* settingsBtns[SETTINGS_COUNT];
+extern lv_obj_t* settingsArrows[SETTINGS_COUNT];
+extern lv_obj_t* settings_desc_label;
+extern lv_obj_t* settings_list;
+extern const char* settingsDescriptions[SETTINGS_COUNT];
+
+extern lv_obj_t* scalingBtns[SCALING_OPTIONS_COUNT];
+extern lv_obj_t* scalingArrows[SCALING_OPTIONS_COUNT];
+extern lv_obj_t* scaling_desc_label;
+extern lv_obj_t* scaling_list;
+extern const char* scalingOptionDescs[SCALING_OPTIONS_COUNT];
+
+extern lv_obj_t* error_attempt_label;
+
+// Global LVGL rotary wheel navigation group
+extern lv_group_t* ui_wheel_group;
+
+// Core UI Lifecycle & Navigation
 void initUI();
-
-// Returns the current UI state
 AppState getAppState();
-
-// Direct state transition
 void setAppState(AppState newState);
 
-// Navigation transitions with animations
 void uiNavToThermal();
 void uiNavToMainMenu();
 void uiNavToSettings(int focusIndex = 0);
@@ -82,10 +110,16 @@ void uiNavToScalingMenu();
 void uiNavToSensorError(uint32_t attemptCount);
 void uiDismissSensorError();
 
-// Boot Screen updater
-void updateBootScreenUI(const char* statusText, uint8_t progressPercent);
+// Screen Builders
+void buildBootScreen();
+void buildThermalScreen();
+void buildMainMenuScreen();
+void buildSettingsScreen();
+void buildScalingScreen();
+void buildErrorScreen();
 
-// Thermal HUD & Overlay updater
+// Screen Telemetry & Value Updaters
+void updateBootScreenUI(const char* statusText, uint8_t progressPercent);
 void updateThermalHUD(
     float centerTemp,
     float minTemp,
@@ -99,16 +133,28 @@ void updateThermalHUD(
     int vpW,
     int vpH
 );
+void updateSettingsValues();
+void updateScalingValues();
+void updateSensorErrorAttempt(uint32_t attemptCount);
+void resetSensorErrorAttempt();
 
-// Thermal feed image descriptor accessor
+// Accessors & Mutators
 lv_obj_t* getThermalImageObj();
+bool processUIInput(WheelEventType event);
 
-// Process encoder events for UI navigation
-bool processUIInput(EncoderEventType event);
-
-// Runtime Settings Accessors
 int getCameraRotationSetting();
 TempUnit getTempUnitSetting();
 PaletteType getPaletteSetting();
 bool getMirrorSetting();
 ScalingMode getScalingModeSetting();
+
+void setCameraRotationSetting(int rot);
+void setTempUnitSetting(TempUnit unit);
+void setPaletteSetting(PaletteType pal);
+void setMirrorSetting(bool mirror);
+void setScalingModeSetting(ScalingMode mode);
+
+// Shared Temperature Conversion Helpers
+float convertTemp(float tempC, TempUnit unit);
+const char* getUnitSym(TempUnit unit);
+const char* getUnitFullName(TempUnit unit);

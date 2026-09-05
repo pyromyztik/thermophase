@@ -31,10 +31,10 @@
 #define NUM_PIXELS        1
 #define LED_BRIGHTNESS    50  // 0-255
 
-// HW-040 Rotary Encoder Pins (Consecutive on Left Header J1)
-#define PIN_ENCODER_CLK   4   // Rotary CLK (Pin 4 on J1)
-#define PIN_ENCODER_DT    5   // Rotary DT  (Pin 5 on J1)
-#define PIN_ENCODER_SW    6   // Push Button Switch (Pin 6 on J1)
+// HW-040 Rotary Wheel Pins (Consecutive on Left Header J1)
+#define PIN_WHEEL_CLK     4   // Rotary CLK (Pin 4 on J1)
+#define PIN_WHEEL_DT      5   // Rotary DT  (Pin 5 on J1)
+#define PIN_WHEEL_SW      6   // Push Button Switch (Pin 6 on J1)
 
 // ==========================================================
 // THERMAL SENSOR CONFIGURATION
@@ -97,6 +97,6 @@
 #define DIAG_TASK_PRIO       1
 #define DIAG_TASK_STACK      4096
 
-#define ENCODER_TASK_CORE    0
-#define ENCODER_TASK_PRIO    2
-#define ENCODER_TASK_STACK   3072
+#define WHEEL_TASK_CORE      0
+#define WHEEL_TASK_PRIO      2
+#define WHEEL_TASK_STACK     3072

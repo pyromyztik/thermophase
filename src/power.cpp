@@ -1,9 +1,9 @@
 #include "power.hpp"
 #include "config.hpp"
 #include "display.hpp"
-#include "rgb_led.hpp"
-#include "thermal_types.hpp"
-#include "encoder.hpp"
+#include "rgb-led.hpp"
+#include "sensor.hpp"
+#include "wheel.hpp"
 #include <esp_sleep.h>
 #include <driver/rtc_io.h>
 #include <driver/gpio.h>
@@ -24,7 +24,7 @@ void powerWakeInit() {
 
     if (wasWokenFromDeepSleep()) {
         Serial.println("\n[PWR] System awakened from Deep Sleep via HW-040 button click!");
-        rtc_gpio_deinit((gpio_num_t)PIN_ENCODER_SW);
+        rtc_gpio_deinit((gpio_num_t)PIN_WHEEL_SW);
     }
 }
 
@@ -43,9 +43,9 @@ void enterDeepSleep() {
         vTaskDelete(sensorTaskHandle);
         sensorTaskHandle = NULL;
     }
-    if (encoderTaskHandle != NULL) {
-        vTaskDelete(encoderTaskHandle);
-        encoderTaskHandle = NULL;
+    if (wheelTaskHandle != NULL) {
+        vTaskDelete(wheelTaskHandle);
+        wheelTaskHandle = NULL;
     }
     if (diagTaskHandle != NULL) {
         vTaskDelete(diagTaskHandle);
@@ -75,19 +75,19 @@ void enterDeepSleep() {
     tft.sendCommand(ILI9341_SLPIN);
 
     // 6. Wait for the user to release the HW-040 button to prevent instant re-trigger
-    while (digitalRead(PIN_ENCODER_SW) == LOW) {
+    while (digitalRead(PIN_WHEEL_SW) == LOW) {
         delay(10);
     }
     delay(150); // Debounce delay after release
 
     // 7. Initialize and configure RTC GPIO 6 with internal pull-up
-    rtc_gpio_init((gpio_num_t)PIN_ENCODER_SW);
-    rtc_gpio_set_direction((gpio_num_t)PIN_ENCODER_SW, RTC_GPIO_MODE_INPUT_ONLY);
-    rtc_gpio_pullup_en((gpio_num_t)PIN_ENCODER_SW);
-    rtc_gpio_pulldown_dis((gpio_num_t)PIN_ENCODER_SW);
+    rtc_gpio_init((gpio_num_t)PIN_WHEEL_SW);
+    rtc_gpio_set_direction((gpio_num_t)PIN_WHEEL_SW, RTC_GPIO_MODE_INPUT_ONLY);
+    rtc_gpio_pullup_en((gpio_num_t)PIN_WHEEL_SW);
+    rtc_gpio_pulldown_dis((gpio_num_t)PIN_WHEEL_SW);
 
     // 8. Enable EXT0 wake-up for active-LOW on GPIO 6
-    esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_ENCODER_SW, 0);
+    esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_WHEEL_SW, 0);
 
     // 9. Enter Deep Sleep
     esp_deep_sleep_start();

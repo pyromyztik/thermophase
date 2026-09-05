@@ -1,5 +1,7 @@
 #pragma once
 #include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_MLX90640.h>
 #include "config.hpp"
 
 // Thermal frame data structure
@@ -9,18 +11,6 @@ struct ThermalFrame {
     float maxTemp;
     float centerTemp;
     uint32_t frameIndex;
-};
-
-// Bilinear scaling precomputed coefficients
-struct ColInterp {
-    uint8_t x0;
-    uint8_t x1;
-    float fx;
-};
-struct RowInterp {
-    uint8_t y0;
-    uint8_t y1;
-    float fy;
 };
 
 // System and device connection health statuses
@@ -56,3 +46,9 @@ extern TaskHandle_t ledTaskHandle;
 void postThermalFrame(const ThermalFrame& frame);
 bool getLatestThermalFrame(ThermalFrame& outFrame);
 
+// MLX90640 Hardware Sensor object
+extern Adafruit_MLX90640 mlx;
+
+// Sensor initialization and background task
+bool initThermalSensor();
+void thermalSensorTask(void *pvParameters);

@@ -1,11 +1,10 @@
 #include <Arduino.h>
 #include "config.hpp"
-#include "thermal_types.hpp"
-#include "thermal_sensor.hpp"
+#include "sensor.hpp"
 #include "display.hpp"
-#include "rgb_led.hpp"
+#include "rgb-led.hpp"
 #include "diagnostics.hpp"
-#include "encoder.hpp"
+#include "wheel.hpp"
 #include "ui.hpp"
 #include "power.hpp"
 
@@ -57,21 +56,19 @@ void setup() {
         LED_TASK_CORE
     );
 
-    // 4. HW-040 Rotary Encoder (GPIO 4, 5, 6)
-
-    // 5. Initialize HW-040 Rotary Encoder (GPIO 4, 5, 6)
-    if (!initEncoder()) {
-        Serial.println("[MAIN] HW-040 Rotary Encoder initialization failed!");
+    // 4. Initialize HW-040 Rotary Wheel (GPIO 4, 5, 6)
+    if (!initWheel()) {
+        Serial.println("[MAIN] HW-040 Rotary Wheel initialization failed!");
     }
-    // 6. Spawn HW-040 Encoder polling task on Core 0
+    // 5. Spawn HW-040 Wheel polling task on Core 0
     xTaskCreatePinnedToCore(
-        encoderTask,
-        "Encoder_Task",
-        ENCODER_TASK_STACK,
+        wheelTask,
+        "Wheel_Task",
+        WHEEL_TASK_STACK,
         NULL,
-        ENCODER_TASK_PRIO,
-        &encoderTaskHandle,
-        ENCODER_TASK_CORE
+        WHEEL_TASK_PRIO,
+        &wheelTaskHandle,
+        WHEEL_TASK_CORE
     );
 
     showBootScreen("Connecting MLX90640...", 55);

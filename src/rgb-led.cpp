@@ -1,4 +1,4 @@
-#include "rgb_led.hpp"
+#include "rgb-led.hpp"
 
 // Initialize NeoPixel strip
 Adafruit_NeoPixel onboardLED(NUM_PIXELS, RGB_PIN, NEO_GRB + NEO_KHZ800);
@@ -9,7 +9,7 @@ void initRGB() {
     onboardLED.show(); // Clear to off
 }
 
-#include "thermal_types.hpp"
+#include "sensor.hpp"
 
 void ledAnimationTask(void *pvParameters) {
     uint32_t hue = 0;

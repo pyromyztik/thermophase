@@ -1,4 +1,4 @@
-#include "thermal_sensor.hpp"
+#include "sensor.hpp"
 
 Adafruit_MLX90640 mlx;
 

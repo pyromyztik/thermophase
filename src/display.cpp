@@ -1,13 +1,13 @@
 #include "display.hpp"
-#include "upscaler.hpp"
+#include "scaling.hpp"
 #include "power.hpp"
 #include <esp_heap_caps.h>
 
 // Hardware SPI TFT instance
 Adafruit_ILI9341 tft = Adafruit_ILI9341(&SPI, TFT_DC, TFT_CS, TFT_RST);
 
-// Multi-mode thermal upscaling engine (Bilinear, Bicubic, Lanczos, TAAU)
-static ThermalUpscaler upscaler;
+// Multi-mode thermal scaling engine (Nearest, Bilinear, Bicubic, Lanczos, TAAU)
+static ThermalScaler scaler;
 
 // Viewport and rotated sensor dimensions
 static int vpX = 0;
@@ -118,7 +118,7 @@ static void recomputeBilinearTables(int rotation) {
         vpY = 0;
     }
 
-    upscaler.reconfigureViewport(vpW, vpH, gridW, gridH);
+    scaler.reconfigureViewport(vpW, vpH, gridW, gridH);
     Serial.printf("[TFT] Recomputed Viewport: %dx%d at (%d,%d), Grid: %dx%d, Rotation: %d\n",
                   vpW, vpH, vpX, vpY, gridW, gridH, currentCameraRotation);
 }
@@ -218,11 +218,11 @@ void updatePalette(PaletteType palette) {
 }
 void updateMirror(bool mirror) {
     currentMirrorFeed = mirror;
-    upscaler.reset();
+    scaler.reset();
 }
 void updateScalingMode(ScalingMode mode) {
     currentScalingMode = mode;
-    upscaler.reset();
+    scaler.reset();
 }
 ScalingMode getScalingMode() {
     return currentScalingMode;
@@ -261,27 +261,27 @@ static void disp_flush_cb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t*
     lv_disp_flush_ready(drv);
 }
 
-// LVGL Rotary Encoder Input Callback
-static void encoder_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
+// LVGL Rotary Wheel Input Callback
+static void wheel_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
     static int32_t last_diff = 0;
     static bool button_pressed = false;
 
-    EncoderEventType evt;
-    while (getEncoderEvent(evt, 0)) {
+    WheelEventType evt;
+    while (getWheelEvent(evt, 0)) {
         AppState state = getAppState();
         if (state == APP_STATE_THERMAL_VIEW) {
-            if (evt == ENCODER_EVENT_CLICK) {
+            if (evt == WHEEL_EVENT_CLICK) {
                 // Click in thermal view transitions to Main Menu.
                 // Consume the event here so it is not forwarded to the newly focused button!
                 uiNavToMainMenu();
             }
         } else {
             // In Main Menu or Settings
-            if (evt == ENCODER_EVENT_ROT_CW) {
+            if (evt == WHEEL_EVENT_ROT_CW) {
                 last_diff += 1;
-            } else if (evt == ENCODER_EVENT_ROT_CCW) {
+            } else if (evt == WHEEL_EVENT_ROT_CCW) {
                 last_diff -= 1;
-            } else if (evt == ENCODER_EVENT_CLICK) {
+            } else if (evt == WHEEL_EVENT_CLICK) {
                 button_pressed = true;
             }
         }
@@ -379,16 +379,16 @@ bool initDisplay() {
     // Initialize LVGL UI screens & styles
     initUI();
 
-    // Register LVGL Input Device Driver (Rotary Encoder)
+    // Register LVGL Input Device Driver (Rotary Wheel)
     lv_indev_drv_init(&indev_drv);
     indev_drv.type = LV_INDEV_TYPE_ENCODER;
-    indev_drv.read_cb = encoder_read_cb;
-    lv_indev_t* encoder_indev = lv_indev_drv_register(&indev_drv);
-    lv_indev_set_group(encoder_indev, ui_encoder_group);
+    indev_drv.read_cb = wheel_read_cb;
+    lv_indev_t* wheel_indev = lv_indev_drv_register(&indev_drv);
+    lv_indev_set_group(wheel_indev, ui_wheel_group);
 
-    // Initialize Multi-mode Upscaler
-    if (!upscaler.init(DISPLAY_WIDTH, DISPLAY_HEIGHT)) {
-        Serial.println("[TFT] Warning: Upscaler PSRAM allocation partial.");
+    // Initialize Multi-mode Scaler
+    if (!scaler.init(DISPLAY_WIDTH, DISPLAY_HEIGHT)) {
+        Serial.println("[TFT] Warning: Scaler PSRAM allocation partial.");
     }
 
     recomputeBilinearTables(currentCameraRotation);
@@ -450,6 +450,8 @@ void displayTask(void *pvParameters) {
         if (globalSensorStatus != SENSOR_OK) {
             if (getAppState() != APP_STATE_SENSOR_ERROR) {
                 uiNavToSensorError(sensorReconnectAttempts);
+            } else {
+                updateSensorErrorAttempt(sensorReconnectAttempts);
             }
         } else if (getAppState() == APP_STATE_SENSOR_ERROR) {
             uiDismissSensorError();
@@ -479,8 +481,8 @@ void displayTask(void *pvParameters) {
                     if (range < 1.0f) range = 1.0f;
                     float invRange = 255.0f / range;
 
-                    // Execute thermal upscaling directly into the thermalFrameBuffer
-                    upscaler.render(
+                    // Execute thermal scaling directly into the thermalFrameBuffer
+                    scaler.render(
                         currentScalingMode,
                         rotatedGrid,
                         gridW,

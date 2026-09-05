@@ -5,9 +5,9 @@
 #include <Adafruit_ILI9341.h>
 #include <lvgl.h>
 #include "config.hpp"
-#include "thermal_types.hpp"
+#include "sensor.hpp"
 #include "ui.hpp"
-#include "encoder.hpp"
+#include "wheel.hpp"
 
 // Hardware SPI TFT instance
 extern Adafruit_ILI9341 tft;
