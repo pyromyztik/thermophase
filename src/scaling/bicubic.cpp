@@ -1,8 +1,8 @@
 #include "scaling.hpp"
 
-// -----------------------------------------------------------------------------
+// --------------------------------------------------------------------------
 // Separable Catmull-Rom Bicubic Interpolation
-// -----------------------------------------------------------------------------
+// --------------------------------------------------------------------------
 void ThermalScaler::renderBicubic(
     const float* lowGrid,
     uint16_t* canvasBuf,
@@ -29,12 +29,14 @@ void ThermalScaler::renderBicubic(
         const float* ir1 = &m_intermediateRows[rCubic.idx1 * vpW];
         const float* ir2 = &m_intermediateRows[rCubic.idx2 * vpW];
         const float* ir3 = &m_intermediateRows[rCubic.idx3 * vpW];
-        float rw0 = rCubic.w0, rw1 = rCubic.w1, rw2 = rCubic.w2, rw3 = rCubic.w3;
+        float rw0 = rCubic.w0, rw1 = rCubic.w1, 
+              rw2 = rCubic.w2, rw3 = rCubic.w3;
 
         uint16_t* destRow = &canvasBuf[(vpY + y) * canvasW + vpX];
 
         for (int x = 0; x < vpW; ++x) {
-            float temp = rw0 * ir0[x] + rw1 * ir1[x] + rw2 * ir2[x] + rw3 * ir3[x];
+            float temp = rw0 * ir0[x] + rw1 * ir1[x] 
+                       + rw2 * ir2[x] + rw3 * ir3[x];
 
             int idx = (int)((temp - smoothedMin) * invRange);
             if (idx < 0) idx = 0;

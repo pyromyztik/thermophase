@@ -158,7 +158,7 @@
 #define LV_FONT_MONTSERRAT_18 0
 #define LV_FONT_MONTSERRAT_20 1
 #define LV_FONT_MONTSERRAT_22 0
-#define LV_FONT_MONTSERRAT_24 1
+#define LV_FONT_MONTSERRAT_24 0
 #define LV_FONT_MONTSERRAT_26 0
 #define LV_FONT_MONTSERRAT_28 0
 #define LV_FONT_MONTSERRAT_30 0
@@ -207,12 +207,12 @@
 
 /* Documentation of the widgets: https://docs.lvgl.io/latest/en/html/widgets/index.html */
 
-#define LV_USE_ARC        1
+#define LV_USE_ARC        0
 #define LV_USE_BAR        1
 #define LV_USE_BTN        1
-#define LV_USE_BTNMATRIX  1
+#define LV_USE_BTNMATRIX  0
 #define LV_USE_CANVAS     1
-#define LV_USE_CHECKBOX   1
+#define LV_USE_CHECKBOX   0
 #define LV_USE_DROPDOWN   0
 #define LV_USE_IMG        1
 #define LV_USE_LABEL      1
@@ -222,8 +222,8 @@
 #endif
 #define LV_USE_LINE       1
 #define LV_USE_ROLLER     0
-#define LV_USE_SLIDER     0
-#define LV_USE_SWITCH     1
+#define LV_USE_SLIDER     1
+#define LV_USE_SWITCH     0
 #define LV_USE_TEXTAREA   0
 #define LV_USE_TABLE      0
 
@@ -231,20 +231,20 @@
  * EXTRA COMPONENTS
  *================*/
 
-#define LV_USE_ANIMIMG    1
+#define LV_USE_ANIMIMG    0
 #define LV_USE_CALENDAR   0
 #define LV_USE_CHART      0
 #define LV_USE_COLORWHEEL 0
 #define LV_USE_IMGBTN     0
 #define LV_USE_KEYBOARD   0
-#define LV_USE_LED        1
+#define LV_USE_LED        0
 #define LV_USE_LIST       1
 #define LV_USE_MENU       0
 #define LV_USE_METER      0
-#define LV_USE_MSGBOX     1
+#define LV_USE_MSGBOX     0
 #define LV_USE_SPAN       0
 #define LV_USE_SPINBOX    0
-#define LV_USE_SPINNER    1
+#define LV_USE_SPINNER    0
 #define LV_USE_TABVIEW    0
 #define LV_USE_TILEVIEW   0
 #define LV_USE_WIN        0

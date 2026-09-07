@@ -94,7 +94,8 @@ void ThermalScaler::reset() {
     memset(m_prevLow, 0, sizeof(m_prevLow));
 }
 
-void ThermalScaler::reconfigureViewport(int vpW, int vpH, int gridW, int gridH) {
+void ThermalScaler::reconfigureViewport(int vpW, int vpH, 
+                                        int gridW, int gridH) {
     m_vpW = vpW;
     m_vpH = vpH;
     m_gridW = gridW;

@@ -27,7 +27,6 @@ static const char* scalingOptionLabels[] = {
 
 static lv_obj_t* scalingNameLabels[SCALING_OPTIONS_COUNT];
 static lv_obj_t* scalingStatusLabels[SCALING_OPTIONS_COUNT];
-static int currentScalingMenuIndex = 0;
 
 static void scalingBtnEventCb(lv_event_t* e) {
     lv_event_code_t code = lv_event_get_code(e);
@@ -35,7 +34,6 @@ static void scalingBtnEventCb(lv_event_t* e) {
 
     if (code == LV_EVENT_FOCUSED) {
         lv_obj_t* btn = lv_event_get_target(e);
-        currentScalingMenuIndex = idx;
         for (int i = 0; i < SCALING_OPTIONS_COUNT; ++i) {
             if (i == idx) {
                 lv_obj_clear_flag(scalingArrows[i], LV_OBJ_FLAG_HIDDEN);
@@ -81,8 +79,8 @@ static void scalingBtnEventCb(lv_event_t* e) {
                 lv_anim_start(&a_val);
             }
         } else {
-            // Back to Settings screen (focused on item 4 "Upscaling")
-            uiNavToSettings(4);
+            // Back to Settings screen (focused on item 5 "Upscaling")
+            uiNavToSettings(5);
         }
     }
 }

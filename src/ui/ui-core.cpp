@@ -11,12 +11,14 @@ static TempUnit currentTempUnitSetting = TEMP_UNIT_CELSIUS;
 static PaletteType currentPaletteSetting = PALETTE_IRONBOW;
 static bool currentMirrorSetting = MIRROR_HORIZONTAL;
 static ScalingMode currentScalingSetting = SCALING_BICUBIC;
+static uint8_t currentBrightnessSetting = TFT_DEFAULT_BRIGHTNESS;
 
 // Screen pointers
 lv_obj_t* screen_boot = nullptr;
 lv_obj_t* screen_thermal = nullptr;
 lv_obj_t* screen_main_menu = nullptr;
 lv_obj_t* screen_settings = nullptr;
+lv_obj_t* screen_brightness = nullptr;
 lv_obj_t* screen_scaling = nullptr;
 lv_obj_t* screen_error = nullptr;
 
@@ -131,6 +133,7 @@ void initUI() {
     buildThermalScreen();
     buildMainMenuScreen();
     buildSettingsScreen();
+    buildBrightnessScreen();
     buildScalingScreen();
     buildErrorScreen();
 
@@ -157,12 +160,14 @@ TempUnit getTempUnitSetting() { return currentTempUnitSetting; }
 PaletteType getPaletteSetting() { return currentPaletteSetting; }
 bool getMirrorSetting() { return currentMirrorSetting; }
 ScalingMode getScalingModeSetting() { return currentScalingSetting; }
+uint8_t getDisplayBrightnessSetting() { return currentBrightnessSetting; }
 
 void setCameraRotationSetting(int rot) { currentRotationSetting = rot; }
 void setTempUnitSetting(TempUnit unit) { currentTempUnitSetting = unit; }
 void setPaletteSetting(PaletteType pal) { currentPaletteSetting = pal; }
 void setMirrorSetting(bool mirror) { currentMirrorSetting = mirror; }
 void setScalingModeSetting(ScalingMode mode) { currentScalingSetting = mode; }
+void setDisplayBrightnessSetting(uint8_t percent) { currentBrightnessSetting = percent; }
 
 // Temperature conversion helpers
 float convertTemp(float tempC, TempUnit unit) {
@@ -257,7 +262,7 @@ void uiNavToSettings(int focusIndex) {
     WheelEventType dummy;
     while (getWheelEvent(dummy, 0)) { }
 
-    if (prevState == APP_STATE_SCALING_MENU) {
+    if (prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS) {
         // Subpage back to settings: slide right
         lv_scr_load_anim(screen_settings, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 100, 0, false);
     } else {
@@ -265,6 +270,20 @@ void uiNavToSettings(int focusIndex) {
         lv_scr_load_anim(screen_settings, LV_SCR_LOAD_ANIM_MOVE_LEFT, 100, 0, false);
     }
     Serial.println("[UI] Transitioned to Settings (100ms Slide)");
+}
+
+void uiNavToBrightness() {
+    currentAppState = APP_STATE_BRIGHTNESS;
+    lv_group_remove_all_objs(ui_wheel_group);
+
+    setupBrightnessGroup();
+
+    WheelEventType dummy;
+    while (getWheelEvent(dummy, 0)) { }
+
+    // Slide left into brightness subpage
+    lv_scr_load_anim(screen_brightness, LV_SCR_LOAD_ANIM_MOVE_LEFT, 100, 0, false);
+    Serial.println("[UI] Transitioned to Brightness Menu (100ms Slide)");
 }
 
 void uiNavToScalingMenu() {
@@ -313,17 +332,3 @@ void uiDismissSensorError() {
     uiNavToThermal();
 }
 
-// -------------------------------------------------------------
-// WHEEL INPUT PROCESSING
-// -------------------------------------------------------------
-bool processUIInput(WheelEventType event) {
-    if (event == WHEEL_EVENT_NONE) return false;
-
-    if (currentAppState == APP_STATE_THERMAL_VIEW) {
-        if (event == WHEEL_EVENT_CLICK) {
-            uiNavToMainMenu();
-            return true;
-        }
-    }
-    return false;
-}

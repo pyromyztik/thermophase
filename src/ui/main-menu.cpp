@@ -10,14 +10,12 @@ static const char* mainMenuLabels[] = {
     "Settings",
     "Power Off"
 };
-static int currentMenuIndex = 0;
 
 static void mainMenuBtnEventCb(lv_event_t* e) {
     lv_event_code_t code = lv_event_get_code(e);
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
 
     if (code == LV_EVENT_FOCUSED) {
-        currentMenuIndex = idx;
         for (int i = 0; i < MAIN_MENU_COUNT; ++i) {
             if (i == idx) {
                 lv_obj_clear_flag(mainMenuArrows[i], LV_OBJ_FLAG_HIDDEN);

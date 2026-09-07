@@ -25,8 +25,9 @@ void updatePalette(PaletteType palette);
 void updateMirror(bool mirror);
 void updateScalingMode(ScalingMode mode);
 ScalingMode getScalingMode();
+void setDisplayBrightness(uint8_t percent);
+uint8_t getDisplayBrightness();
 
 // Buffer and palette accessors for thermal pipeline
 uint16_t* getThermalFrameBuffer();
 const uint16_t* getActivePalette();
-void getThermalViewport(int& outX, int& outY, int& outW, int& outH);

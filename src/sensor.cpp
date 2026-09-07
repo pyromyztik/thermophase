@@ -1,4 +1,6 @@
 #include "sensor.hpp"
+#include "diagnostics.hpp"
+#include <esp_timer.h>
 
 Adafruit_MLX90640 mlx;
 
@@ -99,6 +101,50 @@ bool initThermalSensor() {
     return true;
 }
 
+// Technique A: De-dither the checkerboard subpage mismatch artifact from MLX90640 Chess mode.
+// Because the two chess subpages are read at different time instants, slight Vdd ripple
+// or ADC reference drift on breadboards causes a systematic offset between Subpage 0 and Subpage 1.
+// Every orthogonal neighbor of Subpage 0 belongs to Subpage 1, so the Laplacian average
+// across the frame reveals the exact inter-subpage offset and eliminates it in ~10 microseconds.
+static void balanceChessSubpages(float* temps) {
+    float sumDiff = 0.0f;
+    int count = 0;
+
+    for (int r = 1; r < SENSOR_HEIGHT - 1; ++r) {
+        for (int c = 1; c < SENSOR_WIDTH - 1; ++c) {
+            if (((r + c) & 1) == 0) {
+                float neighborAvg = 0.25f * (
+                    temps[(r - 1) * SENSOR_WIDTH + c] +
+                    temps[(r + 1) * SENSOR_WIDTH + c] +
+                    temps[r * SENSOR_WIDTH + (c - 1)] +
+                    temps[r * SENSOR_WIDTH + (c + 1)]
+                );
+                sumDiff += (temps[r * SENSOR_WIDTH + c] - neighborAvg);
+                count++;
+            }
+        }
+    }
+
+    if (count > 0) {
+        float halfOffset = (sumDiff / (float)count) * 0.5f;
+
+        // Safety clamp: normal subpage drift is 0.1C to 1.0C; avoid over-correcting sharp scene steps
+        if (halfOffset > 2.0f) halfOffset = 2.0f;
+        if (halfOffset < -2.0f) halfOffset = -2.0f;
+
+        for (int r = 0; r < SENSOR_HEIGHT; ++r) {
+            for (int c = 0; c < SENSOR_WIDTH; ++c) {
+                int idx = r * SENSOR_WIDTH + c;
+                if (((r + c) & 1) == 0) {
+                    temps[idx] -= halfOffset;
+                } else {
+                    temps[idx] += halfOffset;
+                }
+            }
+        }
+    }
+}
+
 void thermalSensorTask(void *pvParameters) {
     Serial.println("[TASK] Thermal Sensor Task started on Core " + String(xPortGetCoreID()));
 
@@ -137,11 +183,20 @@ void thermalSensorTask(void *pvParameters) {
             continue;
         }
 
+        static int64_t lastSensorStartUs = 0;
+        int64_t sensorStartUs = esp_timer_get_time();
+        int64_t sensorIntervalUs = (lastSensorStartUs > 0) ? (sensorStartUs - lastSensorStartUs) : 62500;
+        lastSensorStartUs = sensorStartUs;
+
         // mlx.getFrame() reads frame subpages over I2C
         int status = mlx.getFrame(localFrame.temperatures);
 
         if (status == 0) {
             consecutiveErrors = 0;
+
+            // Technique A: Remove high-frequency chess subpage mismatch / criss-cross pattern
+            balanceChessSubpages(localFrame.temperatures);
+
             float tMin = 1000.0f;
             float tMax = -1000.0f;
 
@@ -171,6 +226,9 @@ void thermalSensorTask(void *pvParameters) {
             if (displayTaskHandle != NULL) {
                 xTaskNotifyGive(displayTaskHandle);
             }
+
+            int64_t sensorEndUs = esp_timer_get_time();
+            logSensorProfile(sensorEndUs - sensorStartUs, sensorIntervalUs);
         } else {
             consecutiveErrors++;
             Serial.printf("[MLX90640] Warning: getFrame returned error code %d (consecutive: %d)\n",

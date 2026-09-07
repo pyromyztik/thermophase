@@ -68,6 +68,9 @@ void enterDeepSleep() {
     gpio_hold_en((gpio_num_t)RGB_PIN);
 
     // 4. Turn off TFT backlight pin immediately and lock it
+    ledcWrite(TFT_LED_PWM_CHANNEL, 0);
+    ledcDetachPin(TFT_LED);
+    pinMode(TFT_LED, OUTPUT);
     digitalWrite(TFT_LED, LOW);
     gpio_hold_en((gpio_num_t)TFT_LED);
 

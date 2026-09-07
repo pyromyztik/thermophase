@@ -34,13 +34,6 @@ struct LanczosInterp {
     float w[6];
 };
 
-// Precomputed horizontal history warp coordinates for TAAU
-struct WarpColInterp {
-    int hx0;
-    int hx1;
-    float hfx;
-    float homfx;
-};
 
 class ThermalScaler {
 public:
@@ -170,8 +163,6 @@ private:
     // Fast line buffers for single-pass CAS sharpening (3 lines in internal SRAM)
     float m_lineBuf[3][DISPLAY_WIDTH];
 
-    // Precomputed horizontal history warp table for TAAU
-    WarpColInterp m_warpColTable[DISPLAY_WIDTH];
 
     // Intermediate horizontal row buffers for bounding box clamping
     float m_interMin0[DISPLAY_WIDTH];

@@ -94,7 +94,7 @@ void ThermalScaler::estimateMotion(
         float eTop = ssd[bestV - 1][bestU];
         float eMid = ssd[bestV][bestU];
         float eBot = ssd[bestV + 1][bestU];
-        float denomY = 2.0f * (eTop - eBot) / denomY;
+        float denomY = 2.0f * (eTop - 2.0f * eMid + eBot);
         if (denomY > 1e-4f) {
             deltaV = (eTop - eBot) / denomY;
             if (deltaV < -0.5f) deltaV = -0.5f;

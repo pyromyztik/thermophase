@@ -1,6 +1,8 @@
 #include "display.hpp"
 #include "scaling.hpp"
 #include "power.hpp"
+#include "diagnostics.hpp"
+#include <esp_timer.h>
 #include <esp_heap_caps.h>
 
 // Hardware SPI TFT instance
@@ -199,9 +201,6 @@ static void initAllPalettes() {
 // Accessors
 uint16_t* getThermalFrameBuffer() { return thermalFrameBuffer; }
 const uint16_t* getActivePalette() { return activePalette; }
-void getThermalViewport(int& outX, int& outY, int& outW, int& outH) {
-    outX = vpX; outY = vpY; outW = vpW; outH = vpH;
-}
 
 // Settings mutators
 void updateCameraRotation(int rotation) {
@@ -226,6 +225,20 @@ void updateScalingMode(ScalingMode mode) {
 }
 ScalingMode getScalingMode() {
     return currentScalingMode;
+}
+
+static uint8_t currentDisplayBrightness = TFT_DEFAULT_BRIGHTNESS;
+
+void setDisplayBrightness(uint8_t percent) {
+    if (percent > 100) percent = 100;
+    if (percent < 10) percent = 10;
+    currentDisplayBrightness = percent;
+    uint32_t duty = ((uint32_t)percent * 255) / 100;
+    ledcWrite(TFT_LED_PWM_CHANNEL, duty);
+}
+
+uint8_t getDisplayBrightness() {
+    return currentDisplayBrightness;
 }
 
 bool checkDisplayConnected() {
@@ -300,8 +313,8 @@ static void wheel_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
 
 void showBootScreen(const char* statusText, uint8_t progressPercent) {
     updateBootScreenUI(statusText, progressPercent);
-    // Backlight on safely after initial frame
-    digitalWrite(TFT_LED, HIGH);
+    // Backlight on safely via PWM after initial frame
+    setDisplayBrightness(currentDisplayBrightness);
 }
 
 bool initDisplay() {
@@ -309,6 +322,9 @@ bool initDisplay() {
 
     pinMode(TFT_LED, OUTPUT);
     digitalWrite(TFT_LED, LOW);
+    ledcSetup(TFT_LED_PWM_CHANNEL, TFT_LED_PWM_FREQ, TFT_LED_PWM_RES);
+    ledcAttachPin(TFT_LED, TFT_LED_PWM_CHANNEL);
+    ledcWrite(TFT_LED_PWM_CHANNEL, 0);
 
     pinMode(TFT_RST, OUTPUT);
     digitalWrite(TFT_RST, HIGH);
@@ -458,11 +474,18 @@ void displayTask(void *pvParameters) {
         }
 
         // 3. Thermal Frame Acquisition and Upscaling (when in live thermal view and fade transition completed)
+        bool frameProcessed = false;
         if (getAppState() == APP_STATE_THERMAL_VIEW && lv_scr_act() == screen_thermal && globalSensorStatus == SENSOR_OK) {
             // Check if notified of new sensor frame (timeout 10 ms to keep UI responsive)
             uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
             if (notified > 0) {
                 if (getLatestThermalFrame(currentFrame)) {
+                    frameProcessed = true;
+                    static int64_t lastFrameStartUs = 0;
+                    int64_t frameStartUs = esp_timer_get_time();
+                    int64_t frameIntervalUs = (lastFrameStartUs > 0) ? (frameStartUs - lastFrameStartUs) : 66666;
+                    lastFrameStartUs = frameStartUs;
+
                     // Rotate raw frame
                     rotateSensorFrame(currentFrame.temperatures, rotatedGrid, currentCameraRotation, currentMirrorFeed);
 
@@ -477,11 +500,20 @@ void displayTask(void *pvParameters) {
                         smoothedMax += 0.25f * (currentFrame.maxTemp - smoothedMax);
                     }
 
+                    // Technique C: Auto-range floor clamping (5.0 deg C)
+                    // When scene thermal contrast is smaller than the floor, center the span symmetrically
+                    // around the scene mean temperature so low-contrast scenes don't over-amplify noise.
                     float range = smoothedMax - smoothedMin;
-                    if (range < 1.0f) range = 1.0f;
+                    float effectiveMin = smoothedMin;
+                    if (range < THERMAL_MIN_RANGE_SPAN) {
+                        float mid = 0.5f * (smoothedMin + smoothedMax);
+                        range = THERMAL_MIN_RANGE_SPAN;
+                        effectiveMin = mid - 0.5f * range;
+                    }
                     float invRange = 255.0f / range;
 
                     // Execute thermal scaling directly into the thermalFrameBuffer
+                    int64_t tScaleStart = esp_timer_get_time();
                     scaler.render(
                         currentScalingMode,
                         rotatedGrid,
@@ -493,10 +525,12 @@ void displayTask(void *pvParameters) {
                         vpW,
                         vpH,
                         vpW,
-                        smoothedMin,
+                        effectiveMin,
                         invRange,
                         activePalette
                     );
+                    int64_t tScaleEnd = esp_timer_get_time();
+                    int64_t scaleUs = tScaleEnd - tScaleStart;
 
                     // FPS calculation
                     frameCount++;
@@ -522,12 +556,23 @@ void displayTask(void *pvParameters) {
                         activePalette,
                         vpX, vpY, vpW, vpH
                     );
+
+                    // Render & flush LVGL draw buffer directly via SPI DMA
+                    int64_t tFlushStart = esp_timer_get_time();
+                    lv_timer_handler();
+                    int64_t tFlushEnd = esp_timer_get_time();
+                    int64_t flushUs = tFlushEnd - tFlushStart;
+
+                    int64_t frameTotalUs = tFlushEnd - frameStartUs;
+                    logFrameProfile(scaleUs, flushUs, frameTotalUs, frameIntervalUs);
                 }
             }
         }
 
-        // 4. Handle LVGL timer and animation ticks
-        lv_timer_handler();
+        // 4. Handle LVGL timer and animation ticks when not flushed with thermal frame
+        if (!frameProcessed) {
+            lv_timer_handler();
+        }
 
         // Yield to allow FreeRTOS scheduling without sleeping through the next frame
         if (getAppState() == APP_STATE_THERMAL_VIEW) {

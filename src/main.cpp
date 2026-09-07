@@ -128,8 +128,18 @@ void loop() {
                     &diagTaskHandle,
                     DIAG_TASK_CORE
                 );
-            } else 
+            } else {
                 Serial.println("\n[WARN] Diagnostics task is already running.");
+            }
+        } else if (input.equalsIgnoreCase("compute") ||
+                   input.equalsIgnoreCase("perf") ||
+                   input.equalsIgnoreCase("headroom") ||
+                   input.equalsIgnoreCase("profile")) {
+            printComputeHeadroomReport();
+        } else if (input.equalsIgnoreCase("help")) {
+            Serial.println("\nAvailable Serial Commands:");
+            Serial.println("  'compute' / 'perf'  - Print real-time CPU compute & headroom audit");
+            Serial.println("  'diagnostics'       - Run complete system & Wi-Fi scan diagnostics");
         }
     }
 
@@ -184,9 +194,15 @@ void loop() {
             Serial.printf("\n Uptime: %lu s | Free Heap: %u bytes\n", now / 1000, ESP.getFreeHeap());
             Serial.println("****************************************************************\n");
         } else {
-            // All systems healthy: periodic single-line telemetry
-            Serial.printf("[HEALTHY] Live Feed: %.1f FPS | Spot: %.1f C | Range: [%.1f - %.1f C] | Uptime: %lu s | Free Heap: %u B\n",
-                          displayFps, displayCenterTemp, displayMinTemp, displayMaxTemp, now / 1000, ESP.getFreeHeap());
+            // All systems healthy: periodic telemetry with compute headroom metrics
+            Serial.printf("[HEALTHY] Live Feed: %.1f FPS | Spot: %.1f C | Range: [%.1f - %.1f C] | Uptime: %lu s\n",
+                          displayFps, displayCenterTemp, displayMinTemp, displayMaxTemp, now / 1000);
+            Serial.printf(" [COMPUTE] Core 1 (Display/Upscale): %4.1f%% (Scale: %4.1f ms, UI+Flush: %4.1f ms) | Headroom: %4.1f ms (%4.1f%%)\n",
+                          globalComputeStats.core1LoadPct, globalComputeStats.scaleTimeMs, globalComputeStats.flushTimeMs,
+                          globalComputeStats.core1HeadroomMs, globalComputeStats.core1HeadroomPct);
+            Serial.printf(" [COMPUTE] Core 0 (Sensor/I2C):     %4.1f%% (I2C: %4.1f ms) | Free DRAM: %u KB | Free PSRAM: %u KB\n\n",
+                          globalComputeStats.core0LoadPct, globalComputeStats.sensorReadMs,
+                          ESP.getFreeHeap() / 1024, ESP.getFreePsram() / 1024);
         }
     }
 
