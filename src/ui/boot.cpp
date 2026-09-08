@@ -70,9 +70,9 @@ void buildBootScreen() {
     lv_obj_set_style_bg_color(boot_bar, UI_COLOR_BG, 0);
     lv_obj_set_style_border_color(boot_bar, UI_COLOR_SEPARATOR, 0);
     lv_obj_set_style_border_width(boot_bar, 1, 0);
-    lv_obj_set_style_radius(boot_bar, 2, 0);
+    lv_obj_set_style_radius(boot_bar, 0, 0);
     lv_obj_set_style_bg_color(boot_bar, UI_COLOR_ACCENT, LV_PART_INDICATOR);
-    lv_obj_set_style_radius(boot_bar, 2, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(boot_bar, 0, LV_PART_INDICATOR);
     lv_bar_set_range(boot_bar, 0, 100);
     lv_bar_set_value(boot_bar, 0, LV_ANIM_OFF);
 

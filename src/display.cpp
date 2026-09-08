@@ -2,8 +2,10 @@
 #include "scaling.hpp"
 #include "power.hpp"
 #include "diagnostics.hpp"
+#include "ppt.hpp"
 #include <esp_timer.h>
 #include <esp_heap_caps.h>
+#include <cmath>
 
 // Hardware SPI TFT instance
 Adafruit_ILI9341 tft = Adafruit_ILI9341(&SPI, TFT_DC, TFT_CS, TFT_RST);
@@ -285,8 +287,40 @@ static void wheel_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
         if (state == APP_STATE_THERMAL_VIEW) {
             if (evt == WHEEL_EVENT_CLICK) {
                 // Click in thermal view transitions to Main Menu.
-                // Consume the event here so it is not forwarded to the newly focused button!
                 uiNavToMainMenu();
+            }
+        } else if (state == APP_STATE_PPT_ARMED || state == APP_STATE_PPT_ACQUIRING || state == APP_STATE_PPT_INSPECT) {
+            if (evt == WHEEL_EVENT_LONG_PRESS) {
+                // Long press (>= 600ms) exits immediately to Main Menu from all PPT states
+                uiNavToMainMenu();
+                break;
+            } else if (state == APP_STATE_PPT_ARMED) {
+                if (evt == WHEEL_EVENT_CLICK) {
+                    if (!isPPTArmedCooldown()) {
+                        // Click in look-around state starts recording immediately
+                        pptTrigger();
+                    }
+                }
+            } else if (state == APP_STATE_PPT_ACQUIRING) {
+                // Burst recording in progress: ignore clicks/rotation
+            } else if (state == APP_STATE_PPT_INSPECT) {
+                if (evt == WHEEL_EVENT_ROT_CW) {
+                    // Increment frequency bin (shallower probe)
+                    pptStepBin(1);
+                    if (displayTaskHandle != NULL) {
+                        xTaskNotifyGive(displayTaskHandle);
+                    }
+                } else if (evt == WHEEL_EVENT_ROT_CCW) {
+                    // Decrement frequency bin (deeper probe)
+                    pptStepBin(-1);
+                    if (displayTaskHandle != NULL) {
+                        xTaskNotifyGive(displayTaskHandle);
+                    }
+                } else if (evt == WHEEL_EVENT_CLICK) {
+                    // Single click in inspect mode returns to look-around preview state
+                    uiNavToPPT();
+                    break;
+                }
             }
         } else {
             // In Main Menu or Settings
@@ -407,6 +441,11 @@ bool initDisplay() {
         Serial.println("[TFT] Warning: Scaler PSRAM allocation partial.");
     }
 
+    // Initialize Pulsed Phase Thermography (PPT) spatiotemporal cube
+    if (!initPPT()) {
+        Serial.println("[TFT] Warning: PPT Engine initialization partial.");
+    }
+
     recomputeBilinearTables(currentCameraRotation);
     initAllPalettes();
 
@@ -473,9 +512,27 @@ void displayTask(void *pvParameters) {
             uiDismissSensorError();
         }
 
-        // 3. Thermal Frame Acquisition and Upscaling (when in live thermal view and fade transition completed)
+        // 3. Thermal Frame Acquisition and Upscaling (when in live thermal view or PPT modes)
         bool frameProcessed = false;
-        if (getAppState() == APP_STATE_THERMAL_VIEW && lv_scr_act() == screen_thermal && globalSensorStatus == SENSOR_OK) {
+        AppState curState = getAppState();
+        bool isLiveThermalState = (curState == APP_STATE_THERMAL_VIEW || 
+                                   curState == APP_STATE_PPT_ARMED || 
+                                   curState == APP_STATE_PPT_ACQUIRING);
+
+        bool inPPTMode = (curState == APP_STATE_PPT_ARMED || 
+                          curState == APP_STATE_PPT_ACQUIRING || 
+                          curState == APP_STATE_PPT_INSPECT);
+        int activeVpW = inPPTMode ? 144 : vpW;
+        int activeVpH = inPPTMode ? 192 : vpH;
+
+        static bool lastInPPT = false;
+        if (inPPTMode != lastInPPT) {
+            scaler.reconfigureViewport(activeVpW, activeVpH, gridW, gridH);
+            lastInPPT = inPPTMode;
+        }
+
+        bool isThermalOrPPTScr = (lv_scr_act() == screen_thermal || lv_scr_act() == screen_ppt);
+        if (isLiveThermalState && isThermalOrPPTScr && globalSensorStatus == SENSOR_OK) {
             // Check if notified of new sensor frame (timeout 10 ms to keep UI responsive)
             uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
             if (notified > 0) {
@@ -489,15 +546,16 @@ void displayTask(void *pvParameters) {
                     // Rotate raw frame
                     rotateSensorFrame(currentFrame.temperatures, rotatedGrid, currentCameraRotation, currentMirrorFeed);
 
-                    // Dynamic scene auto-ranging
+                    // Dynamic scene auto-ranging:
+                    // Track robust percentiles (2nd & 98th) smoothly to eliminate single-pixel spikes while staying responsive
                     static bool autoRangeInitialized = false;
                     if (!autoRangeInitialized) {
-                        smoothedMin = currentFrame.minTemp;
-                        smoothedMax = currentFrame.maxTemp;
+                        smoothedMin = currentFrame.robustMin;
+                        smoothedMax = currentFrame.robustMax;
                         autoRangeInitialized = true;
                     } else {
-                        smoothedMin += 0.25f * (currentFrame.minTemp - smoothedMin);
-                        smoothedMax += 0.25f * (currentFrame.maxTemp - smoothedMax);
+                        smoothedMin += 0.20f * (currentFrame.robustMin - smoothedMin);
+                        smoothedMax += 0.20f * (currentFrame.robustMax - smoothedMax);
                     }
 
                     // Technique C: Auto-range floor clamping (5.0 deg C)
@@ -522,9 +580,9 @@ void displayTask(void *pvParameters) {
                         thermalFrameBuffer,
                         0,
                         0,
-                        vpW,
-                        vpH,
-                        vpW,
+                        activeVpW,
+                        activeVpH,
+                        activeVpW,
                         effectiveMin,
                         invRange,
                         activePalette
@@ -545,17 +603,36 @@ void displayTask(void *pvParameters) {
                     displayMinTemp = currentFrame.minTemp;
                     displayMaxTemp = currentFrame.maxTemp;
 
-                    // Update LVGL HUD telemetry and color bar
-                    updateThermalHUD(
-                        currentFrame.centerTemp,
-                        currentFrame.minTemp,
-                        currentFrame.maxTemp,
-                        currentFps,
-                        currentScalingMode,
-                        currentTempUnit,
-                        activePalette,
-                        vpX, vpY, vpW, vpH
-                    );
+                    // Update LVGL HUD telemetry and badges based on mode
+                    if (curState == APP_STATE_THERMAL_VIEW) {
+                        updateThermalHUD(
+                            currentFrame.centerTemp,
+                            effectiveMin,
+                            effectiveMin + range,
+                            currentFps,
+                            currentScalingMode,
+                            currentTempUnit,
+                            activePalette,
+                            vpX, vpY, vpW, vpH
+                        );
+                    } else if (curState == APP_STATE_PPT_ARMED) {
+                        if (isPPTAcquiring()) {
+                            setAppState(APP_STATE_PPT_ACQUIRING);
+                            updatePPTScreenAcquiring(pptGetAcquiredFrames(), PPT_NUM_FRAMES);
+                        } else {
+                            updatePPTScreenArmed(pptGetCurrentDt(), PPT_TRIGGER_THRESH_C);
+                        }
+                    } else if (curState == APP_STATE_PPT_ACQUIRING) {
+                        if (isPPTInspect()) {
+                            setAppState(APP_STATE_PPT_INSPECT);
+                            curState = APP_STATE_PPT_INSPECT;
+                            if (displayTaskHandle != NULL) {
+                                xTaskNotifyGive(displayTaskHandle);
+                            }
+                        } else {
+                            updatePPTScreenAcquiring(pptGetAcquiredFrames(), PPT_NUM_FRAMES);
+                        }
+                    }
 
                     // Render & flush LVGL draw buffer directly via SPI DMA
                     int64_t tFlushStart = esp_timer_get_time();
@@ -567,6 +644,78 @@ void displayTask(void *pvParameters) {
                     logFrameProfile(scaleUs, flushUs, frameTotalUs, frameIntervalUs);
                 }
             }
+        } else if (curState == APP_STATE_PPT_INSPECT && lv_scr_act() == screen_ppt) {
+            // PPT Phase Inspection: render frequency depth slice
+            static int lastRenderedBin = -1;
+            static ScalingMode lastRenderedScalingMode = (ScalingMode)-1;
+            static int lastRenderedRotation = -1;
+            static bool lastRenderedMirror = false;
+            static const uint16_t* lastRenderedPal = nullptr;
+            static AppState lastState = APP_STATE_BOOT;
+
+            int currentBin = pptGetBin();
+            bool needRerender = (currentBin != lastRenderedBin || 
+                                 currentScalingMode != lastRenderedScalingMode ||
+                                 currentCameraRotation != lastRenderedRotation ||
+                                 currentMirrorFeed != lastRenderedMirror ||
+                                 activePalette != lastRenderedPal ||
+                                 curState != lastState);
+
+            uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(15));
+            if (notified > 0) needRerender = true;
+
+            if (needRerender) {
+                lastState = curState;
+                lastRenderedBin = currentBin;
+                lastRenderedScalingMode = currentScalingMode;
+                lastRenderedRotation = currentCameraRotation;
+                lastRenderedMirror = currentMirrorFeed;
+                lastRenderedPal = activePalette;
+
+                // Fetch normalized phase array (0.0f - 255.0f)
+                const float* normPhase = pptGetNormalizedPhaseGrid();
+
+                // Rotate raw 32x24 phase grid to match camera orientation
+                rotateSensorFrame(normPhase, rotatedGrid, currentCameraRotation, currentMirrorFeed);
+
+                // Upscale directly into thermalFrameBuffer using active scaler mode
+                scaler.render(
+                    currentScalingMode,
+                    rotatedGrid,
+                    gridW,
+                    gridH,
+                    thermalFrameBuffer,
+                    0,
+                    0,
+                    activeVpW,
+                    activeVpH,
+                    activeVpW,
+                    0.0f,
+                    1.0f,
+                    activePalette
+                );
+
+                float pMin, pMax, pCenter;
+                pptGetPhaseStats(pMin, pMax, pCenter);
+
+                int bin = pptGetBin();
+                float freq = pptGetBinFrequency(bin);
+                const char* depth = pptGetDepthDescription(bin);
+
+                updatePPTScreenInspect(
+                    bin,
+                    freq,
+                    pCenter,
+                    pMin,
+                    pMax,
+                    depth,
+                    currentScalingMode,
+                    activePalette
+                );
+
+                lv_timer_handler();
+                frameProcessed = true;
+            }
         }
 
         // 4. Handle LVGL timer and animation ticks when not flushed with thermal frame
@@ -575,7 +724,7 @@ void displayTask(void *pvParameters) {
         }
 
         // Yield to allow FreeRTOS scheduling without sleeping through the next frame
-        if (getAppState() == APP_STATE_THERMAL_VIEW) {
+        if (isLiveThermalState) {
             taskYIELD();
         } else {
             vTaskDelay(pdMS_TO_TICKS(10));

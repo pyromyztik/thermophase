@@ -60,6 +60,7 @@ void wheelTask(void *pvParameters) {
     // Button debounce tracking
     bool lastRawBtn = HIGH;
     bool btnIsPressed = false;
+    bool longPressTriggered = false;
     uint32_t btnPressTime = 0;
 
     while (true) {
@@ -85,7 +86,7 @@ void wheelTask(void *pvParameters) {
             }
         }
 
-        // --- 2. PUSH BUTTON DEBOUNCING ---
+        // --- 2. PUSH BUTTON DEBOUNCING & LONG-PRESS DETECTION ---
         bool rawBtn = digitalRead(PIN_WHEEL_SW);
         uint32_t now = millis();
 
@@ -93,18 +94,25 @@ void wheelTask(void *pvParameters) {
             // Button pressed down
             btnPressTime = now;
             lastRawBtn = LOW;
+            longPressTriggered = false;
         } else if (rawBtn == LOW && lastRawBtn == LOW) {
             // Holding down - verify stable debounce period >= 25ms
             if (!btnIsPressed && (now - btnPressTime >= 25)) {
                 btnIsPressed = true;
             }
+            // Trigger long-press immediately once duration reaches 600ms
+            if (btnIsPressed && !longPressTriggered && (now - btnPressTime >= 600)) {
+                longPressTriggered = true;
+                postEvent(WHEEL_EVENT_LONG_PRESS);
+            }
         } else if (rawBtn == HIGH && lastRawBtn == LOW) {
             // Released
-            if (btnIsPressed) {
-                // Valid debounced click event on button release
+            if (btnIsPressed && !longPressTriggered) {
+                // Valid debounced short click event on button release
                 postEvent(WHEEL_EVENT_CLICK);
             }
             btnIsPressed = false;
+            longPressTriggered = false;
             lastRawBtn = HIGH;
         }
 
@@ -112,4 +120,3 @@ void wheelTask(void *pvParameters) {
         vTaskDelay(pdMS_TO_TICKS(2));
     }
 }
-

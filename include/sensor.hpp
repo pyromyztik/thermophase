@@ -9,6 +9,8 @@ struct ThermalFrame {
     float temperatures[SENSOR_PIXELS];
     float minTemp;
     float maxTemp;
+    float robustMin;
+    float robustMax;
     float centerTemp;
     uint32_t frameIndex;
 };

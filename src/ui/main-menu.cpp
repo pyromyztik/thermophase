@@ -7,6 +7,7 @@ lv_obj_t* mainMenuArrows[MAIN_MENU_COUNT];
 
 static const char* mainMenuLabels[] = {
     "Live Thermal View",
+    "Pulsed Phase (PPT)",
     "Settings",
     "Power Off"
 };
@@ -27,8 +28,10 @@ static void mainMenuBtnEventCb(lv_event_t* e) {
         if (idx == 0) {
             uiNavToThermal();
         } else if (idx == 1) {
-            uiNavToSettings();
+            uiNavToPPT();
         } else if (idx == 2) {
+            uiNavToSettings();
+        } else if (idx == 3) {
             // Power off action with smooth fade out
             Serial.println("[UI] Powering Off System...");
             enterDeepSleep();
@@ -54,12 +57,12 @@ void buildMainMenuScreen() {
     lv_line_set_points(line_top, h_line_pts, 2);
     lv_obj_add_style(line_top, &style_divider, 0);
 
-    // Menu Buttons Container
-    int itemY[3] = {48, 100, 152};
+    // Menu Buttons Container (4 items spaced vertically)
+    int itemY[4] = {40, 82, 124, 166};
     for (int i = 0; i < MAIN_MENU_COUNT; ++i) {
         mainMenuBtns[i] = lv_btn_create(screen_main_menu);
         lv_obj_set_pos(mainMenuBtns[i], 30, itemY[i]);
-        lv_obj_set_size(mainMenuBtns[i], 260, 40);
+        lv_obj_set_size(mainMenuBtns[i], 260, 36);
         lv_obj_add_style(mainMenuBtns[i], &style_btn_default, 0);
         lv_obj_add_style(mainMenuBtns[i], &style_btn_focused, LV_STATE_FOCUSED);
         lv_obj_add_style(mainMenuBtns[i], &style_btn_focused, LV_STATE_FOCUS_KEY);

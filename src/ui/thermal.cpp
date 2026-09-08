@@ -9,15 +9,20 @@ static lv_obj_t* thermal_reticle_container = nullptr;
 // Side HUD Widgets (for 3:4 aspect ratio)
 static lv_obj_t* hud_left_panel = nullptr;
 static lv_obj_t* hud_right_panel = nullptr;
+static lv_obj_t* title_thm = nullptr;
+static lv_obj_t* lbl_cnt = nullptr;
 static lv_obj_t* label_center_temp = nullptr;
 static lv_obj_t* label_temp_unit = nullptr;
+static lv_obj_t* lbl_min_hdr = nullptr;
 static lv_obj_t* label_min_temp = nullptr;
+static lv_obj_t* lbl_max_hdr = nullptr;
 static lv_obj_t* label_max_temp = nullptr;
 static lv_obj_t* label_fps = nullptr;
 static lv_obj_t* label_scaling_mode = nullptr;
 static lv_obj_t* canvas_colorbar = nullptr;
 static lv_color_t colorbar_cbuf[16 * 160];
 static lv_obj_t* label_colorbar_max = nullptr;
+static lv_obj_t* label_colorbar_mid = nullptr;
 static lv_obj_t* label_colorbar_min = nullptr;
 
 // Fullscreen Overlays (for stretched mode)
@@ -96,16 +101,17 @@ void buildThermalScreen() {
     lv_obj_set_style_border_color(hud_left_panel, UI_COLOR_SEPARATOR, 0);
     lv_obj_set_style_border_width(hud_left_panel, 1, 0);
     lv_obj_set_style_border_side(hud_left_panel, LV_BORDER_SIDE_RIGHT, 0);
+    lv_obj_set_style_radius(hud_left_panel, 0, 0);
     lv_obj_set_style_pad_all(hud_left_panel, 4, 0);
     lv_obj_clear_flag(hud_left_panel, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t* title_thm = lv_label_create(hud_left_panel);
+    title_thm = lv_label_create(hud_left_panel);
     lv_label_set_text(title_thm, "THERMAL");
     lv_obj_set_style_text_color(title_thm, UI_COLOR_YELLOW, 0);
     lv_obj_set_style_text_font(title_thm, &lv_font_montserrat_10, 0);
     lv_obj_align(title_thm, LV_ALIGN_TOP_LEFT, 2, 4);
 
-    lv_obj_t* lbl_cnt = lv_label_create(hud_left_panel);
+    lbl_cnt = lv_label_create(hud_left_panel);
     lv_label_set_text(lbl_cnt, "CENTER");
     lv_obj_set_style_text_color(lbl_cnt, UI_COLOR_TEXT_DIM, 0);
     lv_obj_set_style_text_font(lbl_cnt, &lv_font_montserrat_10, 0);
@@ -123,7 +129,7 @@ void buildThermalScreen() {
     lv_obj_set_style_text_font(label_temp_unit, &lv_font_montserrat_10, 0);
     lv_obj_align(label_temp_unit, LV_ALIGN_TOP_LEFT, 2, 68);
 
-    lv_obj_t* lbl_min_hdr = lv_label_create(hud_left_panel);
+    lbl_min_hdr = lv_label_create(hud_left_panel);
     lv_label_set_text(lbl_min_hdr, "MIN TEMP");
     lv_obj_set_style_text_color(lbl_min_hdr, UI_COLOR_CYAN, 0);
     lv_obj_set_style_text_font(lbl_min_hdr, &lv_font_montserrat_10, 0);
@@ -135,7 +141,7 @@ void buildThermalScreen() {
     lv_obj_set_style_text_font(label_min_temp, &lv_font_montserrat_12, 0);
     lv_obj_align(label_min_temp, LV_ALIGN_TOP_LEFT, 2, 118);
 
-    lv_obj_t* lbl_max_hdr = lv_label_create(hud_left_panel);
+    lbl_max_hdr = lv_label_create(hud_left_panel);
     lv_label_set_text(lbl_max_hdr, "MAX TEMP");
     lv_obj_set_style_text_color(lbl_max_hdr, UI_COLOR_ORANGE, 0);
     lv_obj_set_style_text_font(lbl_max_hdr, &lv_font_montserrat_10, 0);
@@ -156,6 +162,7 @@ void buildThermalScreen() {
     lv_obj_set_style_border_color(hud_right_panel, UI_COLOR_SEPARATOR, 0);
     lv_obj_set_style_border_width(hud_right_panel, 1, 0);
     lv_obj_set_style_border_side(hud_right_panel, LV_BORDER_SIDE_LEFT, 0);
+    lv_obj_set_style_radius(hud_right_panel, 0, 0);
     lv_obj_set_style_pad_all(hud_right_panel, 4, 0);
     lv_obj_clear_flag(hud_right_panel, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -177,12 +184,19 @@ void buildThermalScreen() {
     lv_obj_set_pos(canvas_colorbar, 6, 36);
     lv_obj_set_style_border_color(canvas_colorbar, UI_COLOR_BORDER, 0);
     lv_obj_set_style_border_width(canvas_colorbar, 1, 0);
+    lv_obj_set_style_radius(canvas_colorbar, 0, 0);
 
     label_colorbar_max = lv_label_create(hud_right_panel);
     lv_label_set_text(label_colorbar_max, "35" UI_SYMBOL_DEGREE);
     lv_obj_set_style_text_color(label_colorbar_max, UI_COLOR_TEXT, 0);
     lv_obj_set_style_text_font(label_colorbar_max, &lv_font_montserrat_10, 0);
     lv_obj_align(label_colorbar_max, LV_ALIGN_TOP_LEFT, 26, 36);
+
+    label_colorbar_mid = lv_label_create(hud_right_panel);
+    lv_label_set_text(label_colorbar_mid, "27" UI_SYMBOL_DEGREE);
+    lv_obj_set_style_text_color(label_colorbar_mid, UI_COLOR_TEXT_DIM, 0);
+    lv_obj_set_style_text_font(label_colorbar_mid, &lv_font_montserrat_10, 0);
+    lv_obj_align(label_colorbar_mid, LV_ALIGN_TOP_LEFT, 26, 110);
 
     label_colorbar_min = lv_label_create(hud_right_panel);
     lv_label_set_text(label_colorbar_min, "20" UI_SYMBOL_DEGREE);
@@ -197,7 +211,7 @@ void buildThermalScreen() {
     lv_obj_set_style_bg_color(hud_fs_center_badge, UI_COLOR_BG, 0);
     lv_obj_set_style_border_color(hud_fs_center_badge, UI_COLOR_BORDER, 0);
     lv_obj_set_style_border_width(hud_fs_center_badge, 1, 0);
-    lv_obj_set_style_radius(hud_fs_center_badge, 4, 0);
+    lv_obj_set_style_radius(hud_fs_center_badge, 0, 0);
     lv_obj_clear_flag(hud_fs_center_badge, LV_OBJ_FLAG_SCROLLABLE);
 
     label_fs_center = lv_label_create(hud_fs_center_badge);
@@ -212,7 +226,7 @@ void buildThermalScreen() {
     lv_obj_set_style_bg_color(hud_fs_range_badge, UI_COLOR_BG, 0);
     lv_obj_set_style_border_color(hud_fs_range_badge, UI_COLOR_BORDER, 0);
     lv_obj_set_style_border_width(hud_fs_range_badge, 1, 0);
-    lv_obj_set_style_radius(hud_fs_range_badge, 4, 0);
+    lv_obj_set_style_radius(hud_fs_range_badge, 0, 0);
     lv_obj_clear_flag(hud_fs_range_badge, LV_OBJ_FLAG_SCROLLABLE);
 
     label_fs_min = lv_label_create(hud_fs_range_badge);
@@ -233,7 +247,7 @@ void buildThermalScreen() {
     lv_obj_set_style_bg_color(hud_fs_fps_badge, UI_COLOR_BG, 0);
     lv_obj_set_style_border_color(hud_fs_fps_badge, UI_COLOR_GREEN, 0);
     lv_obj_set_style_border_width(hud_fs_fps_badge, 1, 0);
-    lv_obj_set_style_radius(hud_fs_fps_badge, 4, 0);
+    lv_obj_set_style_radius(hud_fs_fps_badge, 0, 0);
     lv_obj_clear_flag(hud_fs_fps_badge, LV_OBJ_FLAG_SCROLLABLE);
 
     label_fs_fps = lv_label_create(hud_fs_fps_badge);
@@ -319,6 +333,14 @@ void updateThermalHUD(
         lastHudTextUpdate = hudNow;
 
         if (vpX > 0) {
+            if (title_thm != nullptr) {
+                lv_label_set_text(title_thm, "THERMAL");
+                lv_obj_set_style_text_color(title_thm, UI_COLOR_YELLOW, 0);
+            }
+            if (lbl_cnt != nullptr) lv_label_set_text(lbl_cnt, "CENTER");
+            if (lbl_min_hdr != nullptr) lv_label_set_text(lbl_min_hdr, "MIN TEMP");
+            if (lbl_max_hdr != nullptr) lv_label_set_text(lbl_max_hdr, "MAX TEMP");
+
             // Update Side Panels
             char buf[32];
             if (unit == TEMP_UNIT_KELVIN) {
@@ -347,6 +369,14 @@ void updateThermalHUD(
                 snprintf(buf, sizeof(buf), "%.0f" UI_SYMBOL_DEGREE, convertTemp(maxTemp, unit));
             }
             lv_label_set_text(label_colorbar_max, buf);
+
+            float midTemp = 0.5f * (minTemp + maxTemp);
+            if (unit == TEMP_UNIT_KELVIN) {
+                snprintf(buf, sizeof(buf), "%.0f", convertTemp(midTemp, unit));
+            } else {
+                snprintf(buf, sizeof(buf), "%.0f" UI_SYMBOL_DEGREE, convertTemp(midTemp, unit));
+            }
+            lv_label_set_text(label_colorbar_mid, buf);
 
             if (unit == TEMP_UNIT_KELVIN) {
                 snprintf(buf, sizeof(buf), "%.0f", convertTemp(minTemp, unit));

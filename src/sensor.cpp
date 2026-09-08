@@ -1,6 +1,9 @@
 #include "sensor.hpp"
 #include "diagnostics.hpp"
+#include "ppt.hpp"
 #include <esp_timer.h>
+#include <algorithm>
+#include <cmath>
 
 Adafruit_MLX90640 mlx;
 
@@ -101,11 +104,11 @@ bool initThermalSensor() {
     return true;
 }
 
-// Technique A: De-dither the checkerboard subpage mismatch artifact from MLX90640 Chess mode.
-// Because the two chess subpages are read at different time instants, slight Vdd ripple
-// or ADC reference drift on breadboards causes a systematic offset between Subpage 0 and Subpage 1.
-// Every orthogonal neighbor of Subpage 0 belongs to Subpage 1, so the Laplacian average
-// across the frame reveals the exact inter-subpage offset and eliminates it in ~10 microseconds.
+// Technique A: Subpage Chess Offset Balancer (De-dithering)
+// Because the criss-cross pattern is caused by a mean offset between Subpage 0 and Subpage 1,
+// we compute the average difference Δ between Subpage 0 pixels and their adjacent Subpage 1 neighbors.
+// Subtract Δ/2 from Subpage 0 and add Δ/2 to Subpage 1.
+// Result: Cancels the checkerboard dither completely without blurring actual thermal edges.
 static void balanceChessSubpages(float* temps) {
     float sumDiff = 0.0f;
     int count = 0;
@@ -194,33 +197,106 @@ void thermalSensorTask(void *pvParameters) {
         if (status == 0) {
             consecutiveErrors = 0;
 
-            // Technique A: Remove high-frequency chess subpage mismatch / criss-cross pattern
+            // 1. Balance subpages (inter-subpage spatial chess offset correction)
             balanceChessSubpages(localFrame.temperatures);
 
-            float tMin = 1000.0f;
-            float tMax = -1000.0f;
+            // 2. Inter-Subpage Frame Mean Balancer (Eliminates whole-frame 8 Hz thermal bouncing)
+            static float evenSubpageMean = 0.0f;
+            static float oddSubpageMean = 0.0f;
+            static bool subpageMeansInitialized = false;
+            static uint32_t subpageCounter = 0;
 
-            // Compute min and max across all 768 pixels
+            float frameSum = 0.0f;
             for (size_t i = 0; i < SENSOR_PIXELS; ++i) {
-                float val = localFrame.temperatures[i];
-                if (val > -50.0f && val < 400.0f) {
-                    if (val < tMin) tMin = val;
-                    if (val > tMax) tMax = val;
+                frameSum += localFrame.temperatures[i];
+            }
+            float currentFrameMean = frameSum / (float)SENSOR_PIXELS;
+
+            bool isSubpage0 = ((subpageCounter & 1) == 0);
+            subpageCounter++;
+
+            if (!subpageMeansInitialized) {
+                evenSubpageMean = currentFrameMean;
+                oddSubpageMean = currentFrameMean;
+                subpageMeansInitialized = true;
+            } else {
+                if (isSubpage0) {
+                    evenSubpageMean += 0.15f * (currentFrameMean - evenSubpageMean);
+                } else {
+                    oddSubpageMean += 0.15f * (currentFrameMean - oddSubpageMean);
                 }
             }
 
-            // Calculate center spot temperature (average of 4 center pixels)
+            float subpageBounceDelta = evenSubpageMean - oddSubpageMean;
+            if (subpageBounceDelta > 1.0f) subpageBounceDelta = 1.0f;
+            if (subpageBounceDelta < -1.0f) subpageBounceDelta = -1.0f;
+
+            float frameCorrection = isSubpage0 ? (-0.5f * subpageBounceDelta) : (0.5f * subpageBounceDelta);
+            for (size_t i = 0; i < SENSOR_PIXELS; ++i) {
+                localFrame.temperatures[i] += frameCorrection;
+            }
+
+            // 2. Compute absolute min/max and robust percentiles (2nd & 98th) to discard outliers/bad pixels
+            float tMin = 1000.0f;
+            float tMax = -1000.0f;
+            static float sortedTemps[SENSOR_PIXELS];
+            int validCount = 0;
+
+            for (size_t i = 0; i < SENSOR_PIXELS; ++i) {
+                float val = localFrame.temperatures[i];
+                if (std::isfinite(val) && val > -50.0f && val < 400.0f) {
+                    if (val < tMin) tMin = val;
+                    if (val > tMax) tMax = val;
+                    sortedTemps[validCount++] = val;
+                }
+            }
+
+            if (validCount > 64) {
+                // Discard lowest 2% (index ~15) and highest 2% (index ~validCount - 16)
+                int pLowIdx = validCount * 2 / 100;
+                int pHighIdx = validCount - 1 - pLowIdx;
+                if (pLowIdx < 0) pLowIdx = 0;
+                if (pHighIdx >= validCount) pHighIdx = validCount - 1;
+
+                std::nth_element(sortedTemps, sortedTemps + pLowIdx, sortedTemps + validCount);
+                localFrame.robustMin = sortedTemps[pLowIdx];
+
+                std::nth_element(sortedTemps + pLowIdx + 1, sortedTemps + pHighIdx, sortedTemps + validCount);
+                localFrame.robustMax = sortedTemps[pHighIdx];
+            } else {
+                localFrame.robustMin = (tMin < 500.0f) ? tMin : 20.0f;
+                localFrame.robustMax = (tMax > -500.0f) ? tMax : 30.0f;
+            }
+
+            // 4. Calculate center spot temperature with temporal smoothing (alpha = 0.25)
             float c0 = localFrame.temperatures[11 * SENSOR_WIDTH + 15];
             float c1 = localFrame.temperatures[11 * SENSOR_WIDTH + 16];
             float c2 = localFrame.temperatures[12 * SENSOR_WIDTH + 15];
             float c3 = localFrame.temperatures[12 * SENSOR_WIDTH + 16];
-            localFrame.centerTemp = (c0 + c1 + c2 + c3) * 0.25f;
+            float rawCenter = (c0 + c1 + c2 + c3) * 0.25f;
+
+            static float smoothedCenter = 25.0f;
+            static bool centerInitialized = false;
+            if (!centerInitialized) {
+                smoothedCenter = rawCenter;
+                centerInitialized = true;
+            } else {
+                if (std::abs(rawCenter - smoothedCenter) > 0.05f) {
+                    smoothedCenter += 0.25f * (rawCenter - smoothedCenter);
+                }
+            }
+            localFrame.centerTemp = smoothedCenter;
 
             localFrame.minTemp = tMin;
             localFrame.maxTemp = tMax;
             localFrame.frameIndex++;
 
             postThermalFrame(localFrame);
+
+            // Feed into PPT engine if armed or acquiring
+            if (isPPTArmed() || isPPTAcquiring()) {
+                pptProcessSensorFrame(localFrame.temperatures);
+            }
 
             // Notify display task that a fresh frame is ready
             if (displayTaskHandle != NULL) {

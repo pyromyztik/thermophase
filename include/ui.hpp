@@ -12,7 +12,10 @@ enum AppState {
     APP_STATE_SETTINGS,         // Settings & configuration screen
     APP_STATE_BRIGHTNESS,       // Dedicated display backlight brightness slider screen
     APP_STATE_SCALING_MENU,     // Dedicated scaling / interpolation mode select screen
-    APP_STATE_SENSOR_ERROR      // Hardware disconnected / sensor error screen
+    APP_STATE_SENSOR_ERROR,     // Hardware disconnected / sensor error screen
+    APP_STATE_PPT_ARMED,        // PPT Armed, awaiting thermal pulse trigger
+    APP_STATE_PPT_ACQUIRING,    // PPT Recording 64 frames
+    APP_STATE_PPT_INSPECT       // PPT Phase depth slicing & frequency sweep
 };
 
 // Temperature Unit Options
@@ -69,6 +72,7 @@ extern lv_style_t style_btn_back_focused;
 // Screen objects
 extern lv_obj_t* screen_boot;
 extern lv_obj_t* screen_thermal;
+extern lv_obj_t* screen_ppt;
 extern lv_obj_t* screen_main_menu;
 extern lv_obj_t* screen_settings;
 extern lv_obj_t* screen_brightness;
@@ -76,7 +80,7 @@ extern lv_obj_t* screen_scaling;
 extern lv_obj_t* screen_error;
 
 // Screen item counts
-constexpr int MAIN_MENU_COUNT = 3;
+constexpr int MAIN_MENU_COUNT = 4;
 constexpr int SETTINGS_COUNT = 7;
 constexpr int SCALING_OPTIONS_COUNT = 6;
 
@@ -113,10 +117,13 @@ void uiNavToBrightness();
 void uiNavToScalingMenu();
 void uiNavToSensorError(uint32_t attemptCount);
 void uiDismissSensorError();
+void uiNavToPPT();
+bool isPPTArmedCooldown();
 
 // Screen Builders
 void buildBootScreen();
 void buildThermalScreen();
+void buildPPTScreen();
 void buildMainMenuScreen();
 void buildSettingsScreen();
 void buildBrightnessScreen();
@@ -138,10 +145,23 @@ void updateThermalHUD(
     int vpW,
     int vpH
 );
+void updatePPTScreenArmed(float currentDt, float thresh);
+void updatePPTScreenAcquiring(int currentFrame, int totalFrames);
+void updatePPTScreenInspect(
+    int binK,
+    float freqHz,
+    float spotPhase,
+    float minPhase,
+    float maxPhase,
+    const char* depthDesc,
+    ScalingMode mode,
+    const uint16_t* activePalette
+);
 void updateSettingsValues();
 void updateBrightnessValues();
 void setupBrightnessGroup();
 void updateScalingValues();
+void updateScalingDesc(int idx);
 void updateSensorErrorAttempt(uint32_t attemptCount);
 void resetSensorErrorAttempt();
 

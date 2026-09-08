@@ -8,7 +8,7 @@ lv_obj_t* settings_desc_label = nullptr;
 lv_obj_t* settings_list = nullptr;
 
 const char* settingsDescriptions[] = {
-    "Adjust display backlight brightness via PWM (10% - 100%)",
+    "Adjust display backlight brightness",
     "Adjust sensor orientation (0" UI_SYMBOL_DEGREE ", 90" UI_SYMBOL_DEGREE ", 180" UI_SYMBOL_DEGREE ", 270" UI_SYMBOL_DEGREE ")",
     "Select temperature unit (" UI_SYMBOL_DEGREE "C, " UI_SYMBOL_DEGREE "F, K)",
     "Select false-color palette for thermal gradients",
@@ -24,7 +24,7 @@ static const char* settingsLabels[] = {
     "Color Palette",
     "Mirror Feed",
     "Upscaling",
-    LV_SYMBOL_LEFT "  Back to Main Menu"
+    "Back to Main Menu"
 };
 
 static lv_obj_t* settingsNameLabels[SETTINGS_COUNT];
@@ -152,10 +152,16 @@ void buildSettingsScreen() {
     lv_line_set_points(line_top, h_line_pts, 2);
     lv_obj_add_style(line_top, &style_divider, 0);
 
-    // Scrollable Settings Items Container (with clean vertical scrollbar)
+    // Vertical Divider Line separating options from right-hand contextual hints
+    static lv_point_t v_line_pts[] = {{216, 32}, {216, 216}};
+    lv_obj_t* line_vert = lv_line_create(screen_settings);
+    lv_line_set_points(line_vert, v_line_pts, 2);
+    lv_obj_add_style(line_vert, &style_divider, 0);
+
+    // Scrollable Settings Items Container (Left side)
     settings_list = lv_obj_create(screen_settings);
-    lv_obj_set_pos(settings_list, 10, 35);
-    lv_obj_set_size(settings_list, 296, 152);
+    lv_obj_set_pos(settings_list, 4, 34);
+    lv_obj_set_size(settings_list, 208, 180);
     lv_obj_set_style_bg_opa(settings_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(settings_list, 0, 0);
     lv_obj_set_style_pad_all(settings_list, 0, 0);
@@ -163,16 +169,16 @@ void buildSettingsScreen() {
     lv_obj_set_scrollbar_mode(settings_list, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_set_style_bg_color(settings_list, UI_COLOR_FOCUS_GREY, LV_PART_SCROLLBAR);
     lv_obj_set_style_bg_opa(settings_list, LV_OPA_COVER, LV_PART_SCROLLBAR);
-    lv_obj_set_style_width(settings_list, 4, LV_PART_SCROLLBAR);
-    lv_obj_set_style_radius(settings_list, 2, LV_PART_SCROLLBAR);
+    lv_obj_set_style_width(settings_list, 3, LV_PART_SCROLLBAR);
+    lv_obj_set_style_radius(settings_list, 0, LV_PART_SCROLLBAR);
     lv_obj_set_style_pad_right(settings_list, 1, LV_PART_SCROLLBAR);
 
-    int itemH = 28;
-    int spacing = 6;
+    int itemH = 26;
+    int spacing = 4;
     for (int i = 0; i < SETTINGS_COUNT; ++i) {
         settingsBtns[i] = lv_btn_create(settings_list);
-        lv_obj_set_pos(settingsBtns[i], 4, i * (itemH + spacing));
-        lv_obj_set_size(settingsBtns[i], 282, itemH);
+        lv_obj_set_pos(settingsBtns[i], 2, i * (itemH + spacing));
+        lv_obj_set_size(settingsBtns[i], 198, itemH);
         lv_obj_add_style(settingsBtns[i], &style_btn_default, 0);
         if (i == 6) {
             // Back item: filled with dark grey and accent border when focused
@@ -193,20 +199,20 @@ void buildSettingsScreen() {
         }
         lv_obj_set_style_text_color(settingsArrows[i], UI_COLOR_ACCENT, 0);
         lv_obj_set_style_text_font(settingsArrows[i], &lv_font_montserrat_12, 0);
-        lv_obj_align(settingsArrows[i], LV_ALIGN_LEFT_MID, 4, 0);
+        lv_obj_align(settingsArrows[i], LV_ALIGN_LEFT_MID, 0, 0);
         if (i != 0) lv_obj_add_flag(settingsArrows[i], LV_OBJ_FLAG_HIDDEN);
 
         // Setting Name
         settingsNameLabels[i] = lv_label_create(settingsBtns[i]);
         lv_label_set_text(settingsNameLabels[i], settingsLabels[i]);
-        lv_obj_align(settingsNameLabels[i], LV_ALIGN_LEFT_MID, 18, 0);
+        lv_obj_align(settingsNameLabels[i], LV_ALIGN_LEFT_MID, 13, 0);
         lv_obj_set_style_text_font(settingsNameLabels[i], &lv_font_montserrat_12, 0);
         lv_obj_set_style_text_color(settingsNameLabels[i], (i == 6) ? UI_COLOR_TEXT_DIM : UI_COLOR_TEXT, 0);
 
         // Setting Value (Right column)
         if (i < 6) {
             settingsValLabels[i] = lv_label_create(settingsBtns[i]);
-            lv_obj_align(settingsValLabels[i], LV_ALIGN_RIGHT_MID, -6, 0);
+            lv_obj_align(settingsValLabels[i], LV_ALIGN_RIGHT_MID, -3, 0);
             lv_obj_set_style_text_color(settingsValLabels[i], UI_COLOR_ACCENT, 0);
             lv_obj_set_style_text_font(settingsValLabels[i], &lv_font_montserrat_12, 0);
         } else {
@@ -217,17 +223,18 @@ void buildSettingsScreen() {
     }
     updateSettingsValues();
 
-    // Divider Line above description
-    static lv_point_t desc_line_pts[] = {{0, 192}, {DISPLAY_WIDTH - 1, 192}};
-    lv_obj_t* line_mid = lv_line_create(screen_settings);
-    lv_line_set_points(line_mid, desc_line_pts, 2);
-    lv_obj_add_style(line_mid, &style_divider, 0);
+    // Right-Side Contextual Description Panel
+    lv_obj_t* hint_hdr = lv_label_create(screen_settings);
+    lv_label_set_text(hint_hdr, "INFO");
+    lv_obj_set_pos(hint_hdr, 222, 38);
+    lv_obj_set_style_text_color(hint_hdr, UI_COLOR_TEXT_DIM, 0);
+    lv_obj_set_style_text_font(hint_hdr, &lv_font_montserrat_10, 0);
 
-    // 1-line contextual description label
     settings_desc_label = lv_label_create(screen_settings);
-    lv_obj_set_pos(settings_desc_label, 14, 197);
-    lv_obj_set_size(settings_desc_label, 292, 14);
-    lv_obj_set_style_text_color(settings_desc_label, UI_COLOR_YELLOW, 0);
+    lv_obj_set_pos(settings_desc_label, 222, 54);
+    lv_obj_set_size(settings_desc_label, 92, 150);
+    lv_label_set_long_mode(settings_desc_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_color(settings_desc_label, UI_COLOR_TEXT_DIM, 0);
     lv_obj_set_style_text_font(settings_desc_label, &lv_font_montserrat_10, 0);
     lv_label_set_text(settings_desc_label, settingsDescriptions[0]);
 

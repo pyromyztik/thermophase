@@ -1,6 +1,7 @@
 #include "ui.hpp"
 #include "display.hpp"
 #include "power.hpp"
+#include "ppt.hpp"
 
 // Active application state
 static AppState currentAppState = APP_STATE_BOOT;
@@ -68,7 +69,7 @@ static void buildStyles() {
     lv_style_set_bg_opa(&style_btn_default, LV_OPA_COVER);
     lv_style_set_border_color(&style_btn_default, UI_COLOR_BORDER);
     lv_style_set_border_width(&style_btn_default, 1);
-    lv_style_set_radius(&style_btn_default, 3);
+    lv_style_set_radius(&style_btn_default, 0);
     lv_style_set_pad_hor(&style_btn_default, 10);
     lv_style_set_pad_ver(&style_btn_default, 8);
     lv_style_set_text_color(&style_btn_default, UI_COLOR_TEXT);
@@ -131,6 +132,7 @@ void initUI() {
     // Build all functional screens
     buildBootScreen();
     buildThermalScreen();
+    buildPPTScreen();
     buildMainMenuScreen();
     buildSettingsScreen();
     buildBrightnessScreen();
@@ -196,6 +198,7 @@ const char* getUnitFullName(TempUnit unit) {
 // -------------------------------------------------------------
 void uiNavToThermal() {
     currentAppState = APP_STATE_THERMAL_VIEW;
+    pptDisarm();
     lv_group_remove_all_objs(ui_wheel_group);
     WheelEventType dummy;
     while (getWheelEvent(dummy, 0)) { }
@@ -205,9 +208,28 @@ void uiNavToThermal() {
     Serial.println("[UI] Transitioned to Live Thermal View (100ms Crossfade)");
 }
 
+static uint32_t pptArmedCooldownUntil = 0;
+
+bool isPPTArmedCooldown() {
+    return (millis() < pptArmedCooldownUntil);
+}
+
+void uiNavToPPT() {
+    currentAppState = APP_STATE_PPT_ARMED;
+    pptArm();
+    pptArmedCooldownUntil = millis() + 400; // 400ms cooldown ignores button click bounce/bleed-through
+    lv_group_remove_all_objs(ui_wheel_group);
+    WheelEventType dummy;
+    while (getWheelEvent(dummy, 0)) { }
+
+    lv_scr_load_anim(screen_ppt, LV_SCR_LOAD_ANIM_FADE_ON, 100, 0, false);
+    Serial.println("[UI] Transitioned to Dedicated PPT Screen (Look-Around Mode, 100ms Crossfade)");
+}
+
 void uiNavToMainMenu() {
     AppState prevState = currentAppState;
     currentAppState = APP_STATE_MAIN_MENU;
+    pptDisarm();
     lv_group_remove_all_objs(ui_wheel_group);
 
     for (int i = 0; i < MAIN_MENU_COUNT; ++i) {
@@ -304,9 +326,7 @@ void uiNavToScalingMenu() {
     }
     lv_group_focus_obj(scalingBtns[initialFocus]);
     updateScalingValues();
-    if (scaling_desc_label != nullptr) {
-        lv_label_set_text(scaling_desc_label, scalingOptionDescs[initialFocus]);
-    }
+    updateScalingDesc(initialFocus);
     if (scaling_list != nullptr) {
         lv_obj_scroll_to_view(scalingBtns[initialFocus], LV_ANIM_OFF);
     }

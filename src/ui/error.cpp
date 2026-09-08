@@ -32,7 +32,7 @@ void buildErrorScreen() {
     lv_obj_set_style_bg_opa(border_box, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_color(border_box, UI_COLOR_ACCENT, 0);
     lv_obj_set_style_border_width(border_box, 2, 0);
-    lv_obj_set_style_radius(border_box, 4, 0);
+    lv_obj_set_style_radius(border_box, 0, 0);
     lv_obj_set_style_pad_all(border_box, 0, 0);
     lv_obj_clear_flag(border_box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scrollbar_mode(border_box, LV_SCROLLBAR_MODE_OFF);
@@ -43,7 +43,7 @@ void buildErrorScreen() {
     lv_obj_align(banner, LV_ALIGN_TOP_MID, 0, 12);
     lv_obj_set_style_bg_color(banner, UI_COLOR_ACCENT, 0);
     lv_obj_set_style_bg_opa(banner, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(banner, 2, 0);
+    lv_obj_set_style_radius(banner, 0, 0);
     lv_obj_set_style_border_width(banner, 0, 0);
     lv_obj_set_style_pad_all(banner, 0, 0);
     lv_obj_clear_flag(banner, LV_OBJ_FLAG_SCROLLABLE);
