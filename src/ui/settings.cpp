@@ -1,5 +1,6 @@
 #include "ui.hpp"
 #include "display.hpp"
+#include "storage.hpp"
 
 // Settings Shared Variables
 lv_obj_t* settingsBtns[SETTINGS_COUNT];
@@ -9,21 +10,21 @@ lv_obj_t* settings_list = nullptr;
 
 const char* settingsDescriptions[] = {
     "Adjust display backlight brightness",
-    "Adjust sensor orientation (0" UI_SYMBOL_DEGREE ", 90" UI_SYMBOL_DEGREE ", 180" UI_SYMBOL_DEGREE ", 270" UI_SYMBOL_DEGREE ")",
     "Select temperature unit (" UI_SYMBOL_DEGREE "C, " UI_SYMBOL_DEGREE "F, K)",
     "Select false-color palette for thermal gradients",
     "Horizontally flip thermal video stream",
     "Open upscaler menu to configure interpolation modes",
-    "Return to main menu"
+    "Select I2C clock: 400 kHz (clean & stable - runs at 8fps) or 800 kHz (little more noisy, but runs at 14-15fps)",
+    "Save all settings and return to main menu."
 };
 
 static const char* settingsLabels[] = {
     "Brightness",
-    "Rotation",
     "Temp Unit",
     "Color Palette",
     "Mirror Feed",
     "Upscaling",
+    "I2C Clock",
     "Back to Main Menu"
 };
 
@@ -43,11 +44,14 @@ static void settingsBtnEventCb(lv_event_t* e) {
                 lv_obj_add_flag(settingsArrows[i], LV_OBJ_FLAG_HIDDEN);
             }
         }
-        // When the back option (item 6) is selected, its text must become the accent color
+        // When the back option (last item, index 6) is selected, its text and arrow become black on red fill
         if (idx == 6) {
-            lv_obj_set_style_text_color(settingsNameLabels[6], UI_COLOR_ACCENT, 0);
+            lv_obj_set_style_text_color(settingsNameLabels[6], lv_color_black(), 0);
+            if (settingsArrows[6] != nullptr) {
+                lv_obj_set_style_text_color(settingsArrows[6], lv_color_black(), 0);
+            }
         } else if (settingsNameLabels[6] != nullptr) {
-            lv_obj_set_style_text_color(settingsNameLabels[6], UI_COLOR_TEXT, 0);
+            lv_obj_set_style_text_color(settingsNameLabels[6], UI_COLOR_TEXT_DIM, 0);
         }
 
         // Update 1-line description
@@ -67,34 +71,35 @@ static void settingsBtnEventCb(lv_event_t* e) {
             case 0: // Brightness: Open dedicated slider subpage
                 uiNavToBrightness();
                 return;
-            case 1: { // Rotation: 0 -> 90 -> 180 -> 270
-                int nextRot = (getCameraRotationSetting() + 1) % 4;
-                setCameraRotationSetting(nextRot);
-                updateCameraRotation(nextRot);
-                break;
-            }
-            case 2: { // Temp Unit: Celsius -> Fahrenheit -> Kelvin -> Celsius
+            case 1: { // Temp Unit: Celsius -> Fahrenheit -> Kelvin -> Celsius
                 TempUnit nextUnit = (TempUnit)((getTempUnitSetting() + 1) % 3);
                 setTempUnitSetting(nextUnit);
                 updateTempUnit(nextUnit);
                 break;
             }
-            case 3: { // Color Palette: Ironbow -> White-Hot -> Rainbow
+            case 2: { // Color Palette: Ironbow -> White-Hot -> Rainbow
                 PaletteType nextPal = (PaletteType)((getPaletteSetting() + 1) % 3);
                 setPaletteSetting(nextPal);
                 updatePalette(nextPal);
                 break;
             }
-            case 4: { // Mirror Feed: OFF <-> ON
+            case 3: { // Mirror Feed: OFF <-> ON
                 bool nextMirror = !getMirrorSetting();
                 setMirrorSetting(nextMirror);
                 updateMirror(nextMirror);
                 break;
             }
-            case 5: // Upscaling: Open dedicated subpage
+            case 4: // Upscaling: Open dedicated subpage
                 uiNavToScalingMenu();
                 return;
+            case 5: { // I2C Clock: 400 kHz <-> 800 kHz
+                uint32_t currentSpeed = getI2CSpeedSetting();
+                uint32_t nextSpeed = (currentSpeed == I2C_SPEED_800K) ? I2C_SPEED_400K : I2C_SPEED_800K;
+                setI2CSpeedSetting(nextSpeed);
+                break;
+            }
             case 6: // Back to Main Menu
+                saveSettingsIfDirty();
                 uiNavToMainMenu();
                 return;
         }
@@ -121,17 +126,18 @@ void updateSettingsValues() {
     snprintf(brightBuf, sizeof(brightBuf), "%d%%", getDisplayBrightnessSetting());
     if (settingsValLabels[0]) lv_label_set_text(settingsValLabels[0], brightBuf);
 
-    const char* rotStrs[4] = {"0" UI_SYMBOL_DEGREE, "90" UI_SYMBOL_DEGREE, "180" UI_SYMBOL_DEGREE, "270" UI_SYMBOL_DEGREE};
     const char* unitStrs[3] = {"Celsius (" UI_SYMBOL_DEGREE "C)", "Fahrenheit (" UI_SYMBOL_DEGREE "F)", "Kelvin (K)"};
     const char* palStrs[3] = {"Ironbow", "White-Hot", "Rainbow"};
     const char* mirStrs[2] = {"OFF", "ON"};
     const char* scaleStrs[5] = {"Nearest", "Bilinear", "Bicubic", "Lanczos", "TAAU"};
 
-    if (settingsValLabels[1]) lv_label_set_text(settingsValLabels[1], rotStrs[getCameraRotationSetting() % 4]);
-    if (settingsValLabels[2]) lv_label_set_text(settingsValLabels[2], unitStrs[getTempUnitSetting() % 3]);
-    if (settingsValLabels[3]) lv_label_set_text(settingsValLabels[3], palStrs[getPaletteSetting() % 3]);
-    if (settingsValLabels[4]) lv_label_set_text(settingsValLabels[4], mirStrs[getMirrorSetting() ? 1 : 0]);
-    if (settingsValLabels[5]) lv_label_set_text(settingsValLabels[5], scaleStrs[getScalingModeSetting() % 5]);
+    if (settingsValLabels[1]) lv_label_set_text(settingsValLabels[1], unitStrs[getTempUnitSetting() % 3]);
+    if (settingsValLabels[2]) lv_label_set_text(settingsValLabels[2], palStrs[getPaletteSetting() % 3]);
+    if (settingsValLabels[3]) lv_label_set_text(settingsValLabels[3], mirStrs[getMirrorSetting() ? 1 : 0]);
+    if (settingsValLabels[4]) lv_label_set_text(settingsValLabels[4], scaleStrs[getScalingModeSetting() % 5]);
+    if (settingsValLabels[5]) {
+        lv_label_set_text(settingsValLabels[5], (getI2CSpeedSetting() == I2C_SPEED_800K) ? "800 kHz" : "400 kHz");
+    }
 }
 
 void buildSettingsScreen() {
@@ -194,10 +200,11 @@ void buildSettingsScreen() {
         settingsArrows[i] = lv_label_create(settingsBtns[i]);
         if (i == 6) {
             lv_label_set_text(settingsArrows[i], LV_SYMBOL_LEFT);
+            lv_obj_set_style_text_color(settingsArrows[i], lv_color_black(), 0);
         } else {
             lv_label_set_text(settingsArrows[i], LV_SYMBOL_RIGHT);
+            lv_obj_set_style_text_color(settingsArrows[i], UI_COLOR_ACCENT, 0);
         }
-        lv_obj_set_style_text_color(settingsArrows[i], UI_COLOR_ACCENT, 0);
         lv_obj_set_style_text_font(settingsArrows[i], &lv_font_montserrat_12, 0);
         lv_obj_align(settingsArrows[i], LV_ALIGN_LEFT_MID, 0, 0);
         if (i != 0) lv_obj_add_flag(settingsArrows[i], LV_OBJ_FLAG_HIDDEN);

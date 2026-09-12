@@ -4,6 +4,7 @@
 #include "rgb-led.hpp"
 #include "sensor.hpp"
 #include "wheel.hpp"
+#include "storage.hpp"
 #include <esp_sleep.h>
 #include <driver/rtc_io.h>
 #include <driver/gpio.h>
@@ -29,6 +30,9 @@ void powerWakeInit() {
 }
 
 void enterDeepSleep() {
+    // Save any pending configuration changes to NVS before powering down
+    saveSettingsIfDirty();
+
     Serial.println("\n[PWR] Entering Deep Sleep mode (~10 uA)...");
     Serial.println("[PWR] Powering off display backlight, LCD panel, and RGB LED.");
     Serial.println("[PWR] Click the HW-040 rotary knob to power on.\n");

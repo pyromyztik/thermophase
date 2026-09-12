@@ -4,12 +4,21 @@
 // Main Menu Shared Variables
 lv_obj_t* mainMenuBtns[MAIN_MENU_COUNT];
 lv_obj_t* mainMenuArrows[MAIN_MENU_COUNT];
+static lv_obj_t* mainMenuLabels_objs[MAIN_MENU_COUNT];
+static lv_obj_t* mainMenuIcons[MAIN_MENU_COUNT];
 
 static const char* mainMenuLabels[] = {
     "Live Thermal View",
     "Pulsed Phase (PPT)",
     "Settings",
     "Power Off"
+};
+
+static const char* mainMenuGlyphs[] = {
+    LV_SYMBOL_PLAY,
+    LV_SYMBOL_STOP,
+    LV_SYMBOL_SETTINGS,
+    LV_SYMBOL_POWER
 };
 
 static void mainMenuBtnEventCb(lv_event_t* e) {
@@ -23,6 +32,21 @@ static void mainMenuBtnEventCb(lv_event_t* e) {
             } else {
                 lv_obj_add_flag(mainMenuArrows[i], LV_OBJ_FLAG_HIDDEN);
             }
+        }
+        // Power Off item (index 3) is styled like a back/exit button:
+        // fills with red, text and icons switch to black
+        if (idx == 3) {
+            if (mainMenuLabels_objs[3]) lv_obj_set_style_text_color(mainMenuLabels_objs[3], lv_color_black(), 0);
+            if (mainMenuArrows[3]) lv_obj_set_style_text_color(mainMenuArrows[3], lv_color_black(), 0);
+            if (mainMenuIcons[3]) lv_obj_set_style_text_color(mainMenuIcons[3], lv_color_black(), 0);
+        } else {
+            if (mainMenuLabels_objs[3]) lv_obj_set_style_text_color(mainMenuLabels_objs[3], UI_COLOR_TEXT_DIM, 0);
+            if (mainMenuIcons[3]) lv_obj_set_style_text_color(mainMenuIcons[3], UI_COLOR_TEXT_DIM, 0);
+        }
+    } else if (code == LV_EVENT_DEFOCUSED) {
+        if (idx == 3) {
+            if (mainMenuLabels_objs[3]) lv_obj_set_style_text_color(mainMenuLabels_objs[3], UI_COLOR_TEXT_DIM, 0);
+            if (mainMenuIcons[3]) lv_obj_set_style_text_color(mainMenuIcons[3], UI_COLOR_TEXT_DIM, 0);
         }
     } else if (code == LV_EVENT_CLICKED) {
         if (idx == 0) {
@@ -64,22 +88,41 @@ void buildMainMenuScreen() {
         lv_obj_set_pos(mainMenuBtns[i], 30, itemY[i]);
         lv_obj_set_size(mainMenuBtns[i], 260, 36);
         lv_obj_add_style(mainMenuBtns[i], &style_btn_default, 0);
-        lv_obj_add_style(mainMenuBtns[i], &style_btn_focused, LV_STATE_FOCUSED);
-        lv_obj_add_style(mainMenuBtns[i], &style_btn_focused, LV_STATE_FOCUS_KEY);
+        if (i == 3) {
+            // Power Off button: styled like back/exit button (filled with red on focus)
+            lv_obj_add_style(mainMenuBtns[i], &style_btn_back_focused, LV_STATE_FOCUSED);
+            lv_obj_add_style(mainMenuBtns[i], &style_btn_back_focused, LV_STATE_FOCUS_KEY);
+        } else {
+            lv_obj_add_style(mainMenuBtns[i], &style_btn_focused, LV_STATE_FOCUSED);
+            lv_obj_add_style(mainMenuBtns[i], &style_btn_focused, LV_STATE_FOCUS_KEY);
+        }
         lv_obj_add_style(mainMenuBtns[i], &style_btn_pressed, LV_STATE_PRESSED);
 
-        // Selection Red Arrow
+        // Selection Arrow Indicator
         mainMenuArrows[i] = lv_label_create(mainMenuBtns[i]);
-        lv_label_set_text(mainMenuArrows[i], LV_SYMBOL_RIGHT);
-        lv_obj_set_style_text_color(mainMenuArrows[i], UI_COLOR_ACCENT, 0);
+        if (i == 3) {
+            lv_label_set_text(mainMenuArrows[i], LV_SYMBOL_LEFT);
+            lv_obj_set_style_text_color(mainMenuArrows[i], lv_color_black(), 0);
+        } else {
+            lv_label_set_text(mainMenuArrows[i], LV_SYMBOL_RIGHT);
+            lv_obj_set_style_text_color(mainMenuArrows[i], UI_COLOR_ACCENT, 0);
+        }
         lv_obj_set_style_text_font(mainMenuArrows[i], &lv_font_montserrat_14, 0);
         lv_obj_align(mainMenuArrows[i], LV_ALIGN_LEFT_MID, 6, 0);
         if (i != 0) lv_obj_add_flag(mainMenuArrows[i], LV_OBJ_FLAG_HIDDEN);
 
         // Menu Label
-        lv_obj_t* lbl = lv_label_create(mainMenuBtns[i]);
-        lv_label_set_text(lbl, mainMenuLabels[i]);
-        lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 24, 0);
+        mainMenuLabels_objs[i] = lv_label_create(mainMenuBtns[i]);
+        lv_label_set_text(mainMenuLabels_objs[i], mainMenuLabels[i]);
+        lv_obj_align(mainMenuLabels_objs[i], LV_ALIGN_LEFT_MID, 24, 0);
+        lv_obj_set_style_text_color(mainMenuLabels_objs[i], (i == 3) ? UI_COLOR_TEXT_DIM : UI_COLOR_TEXT, 0);
+
+        // Right-side icon glyph
+        mainMenuIcons[i] = lv_label_create(mainMenuBtns[i]);
+        lv_label_set_text(mainMenuIcons[i], mainMenuGlyphs[i]);
+        lv_obj_set_style_text_font(mainMenuIcons[i], &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(mainMenuIcons[i], UI_COLOR_TEXT_DIM, 0);
+        lv_obj_align(mainMenuIcons[i], LV_ALIGN_RIGHT_MID, -12, 0);
 
         lv_obj_add_event_cb(mainMenuBtns[i], mainMenuBtnEventCb, LV_EVENT_ALL, (void*)(intptr_t)i);
     }

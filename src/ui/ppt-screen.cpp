@@ -43,7 +43,64 @@ static lv_obj_t* ppt_lbl_scaler = nullptr;
 static lv_obj_t* ppt_canvas_colorbar = nullptr;
 static lv_color_t ppt_colorbar_cbuf[14 * 148];
 static lv_obj_t* ppt_lbl_cb_max = nullptr;
+static lv_obj_t* ppt_lbl_cb_mid = nullptr;
 static lv_obj_t* ppt_lbl_cb_min = nullptr;
+
+// Greek letter Pi glyph definition (UTF-8 \xCF\x80, Unicode 0x03C0)
+#define UI_SYMBOL_PI "\xCF\x80"
+
+// 4-bpp Anti-aliased Greek Pi glyph (DejaVu Sans Oblique 10px, range 0x03C0)
+// Generated via lv_font_conv, falls back to lv_font_montserrat_10 for other glyphs (+, -, numbers, degree)
+static LV_ATTRIBUTE_LARGE_CONST const uint8_t glyph_bitmap_pi[] = {
+    /* U+03C0 "π" */
+    0x2f, 0xfe, 0x12, 0x5b, 0xf4, 0xd1, 0x7, 0x50,
+    0x52, 0x0, 0x18, 0x88, 0xc0, 0x6, 0xa0, 0xae,
+    0x0, 0x63, 0x7, 0x71, 0x0
+};
+
+static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc_pi[] = {
+    {.bitmap_index = 0, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0} /* id = 0 reserved */,
+    {.bitmap_index = 0, .adv_w = 96, .box_w = 7, .box_h = 6, .ofs_x = 0, .ofs_y = 0}
+};
+
+static const lv_font_fmt_txt_cmap_t cmaps_pi[] = {
+    {
+        .range_start = 960,
+        .range_length = 1,
+        .glyph_id_start = 1,
+        .unicode_list = NULL,
+        .glyph_id_ofs_list = NULL,
+        .list_length = 0,
+        .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
+    }
+};
+
+static lv_font_fmt_txt_glyph_cache_t cache_pi;
+static const lv_font_fmt_txt_dsc_t font_dsc_pi = {
+    .glyph_bitmap = glyph_bitmap_pi,
+    .glyph_dsc = glyph_dsc_pi,
+    .cmaps = cmaps_pi,
+    .kern_dsc = NULL,
+    .kern_scale = 0,
+    .cmap_num = 1,
+    .bpp = 4,
+    .kern_classes = 0,
+    .bitmap_format = 1,
+    .cache = &cache_pi
+};
+
+const lv_font_t font_pi_10 = {
+    .get_glyph_dsc = lv_font_get_glyph_dsc_fmt_txt,
+    .get_glyph_bitmap = lv_font_get_bitmap_fmt_txt,
+    .line_height = 11,
+    .base_line = 2,
+    .subpx = LV_FONT_SUBPX_NONE,
+    .underline_position = -1,
+    .underline_thickness = 1,
+    .dsc = &font_dsc_pi,
+    .fallback = &lv_font_montserrat_10,
+    .user_data = NULL
+};
 
 void buildPPTScreen() {
     screen_ppt = lv_obj_create(NULL);
@@ -264,15 +321,21 @@ void buildPPTScreen() {
     lv_obj_set_style_radius(ppt_canvas_colorbar, 0, 0);
 
     ppt_lbl_cb_max = lv_label_create(ppt_right_panel);
-    lv_label_set_text(ppt_lbl_cb_max, "+pi");
+    lv_label_set_text(ppt_lbl_cb_max, "--" UI_SYMBOL_DEGREE);
     lv_obj_set_style_text_color(ppt_lbl_cb_max, UI_COLOR_TEXT, 0);
-    lv_obj_set_style_text_font(ppt_lbl_cb_max, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(ppt_lbl_cb_max, &font_pi_10, 0);
     lv_obj_align(ppt_lbl_cb_max, LV_ALIGN_TOP_LEFT, 26, 34);
 
+    ppt_lbl_cb_mid = lv_label_create(ppt_right_panel);
+    lv_label_set_text(ppt_lbl_cb_mid, "--" UI_SYMBOL_DEGREE);
+    lv_obj_set_style_text_color(ppt_lbl_cb_mid, UI_COLOR_TEXT_DIM, 0);
+    lv_obj_set_style_text_font(ppt_lbl_cb_mid, &font_pi_10, 0);
+    lv_obj_align(ppt_lbl_cb_mid, LV_ALIGN_TOP_LEFT, 26, 102);
+
     ppt_lbl_cb_min = lv_label_create(ppt_right_panel);
-    lv_label_set_text(ppt_lbl_cb_min, "-pi");
+    lv_label_set_text(ppt_lbl_cb_min, "--" UI_SYMBOL_DEGREE);
     lv_obj_set_style_text_color(ppt_lbl_cb_min, UI_COLOR_TEXT, 0);
-    lv_obj_set_style_text_font(ppt_lbl_cb_min, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(ppt_lbl_cb_min, &font_pi_10, 0);
     lv_obj_align(ppt_lbl_cb_min, LV_ALIGN_TOP_LEFT, 26, 170);
 
     ppt_lbl_scaler = lv_label_create(ppt_right_panel);
@@ -282,7 +345,14 @@ void buildPPTScreen() {
     lv_obj_align(ppt_lbl_scaler, LV_ALIGN_TOP_LEFT, 6, 190);
 }
 
-void updatePPTScreenArmed(float currentDt, float thresh) {
+void updatePPTScreenArmed(
+    float currentDt, 
+    float thresh, 
+    float minTemp, 
+    float maxTemp, 
+    TempUnit unit, 
+    const uint16_t* activePalette
+) {
     if (screen_ppt == nullptr) return;
 
     // Top letterbox status readout
@@ -313,6 +383,46 @@ void updatePPTScreenArmed(float currentDt, float thresh) {
     // Right Panel
     lv_label_set_text(ppt_lbl_depth_hdr, "STATUS");
     lv_label_set_text(ppt_lbl_depth_val, "READY");
+
+    // Update colorbar canvas with active thermal palette
+    static const uint16_t* lastPreviewPalette = nullptr;
+    if (activePalette != nullptr && activePalette != lastPreviewPalette) {
+        lastPreviewPalette = activePalette;
+        for (int y = 0; y < 148; ++y) {
+            int palIdx = 255 - (y * 255) / 147;
+            lv_color_t c;
+            c.full = activePalette[palIdx];
+            for (int x = 0; x < 14; ++x) {
+                ppt_colorbar_cbuf[y * 14 + x] = c;
+            }
+        }
+        lv_obj_invalidate(ppt_canvas_colorbar);
+    }
+
+    if (maxTemp > minTemp) {
+        char tbuf[16];
+        if (unit == TEMP_UNIT_KELVIN) {
+            snprintf(tbuf, sizeof(tbuf), "%.0f", convertTemp(maxTemp, unit));
+        } else {
+            snprintf(tbuf, sizeof(tbuf), "%.0f" UI_SYMBOL_DEGREE, convertTemp(maxTemp, unit));
+        }
+        lv_label_set_text(ppt_lbl_cb_max, tbuf);
+
+        float midTemp = 0.5f * (minTemp + maxTemp);
+        if (unit == TEMP_UNIT_KELVIN) {
+            snprintf(tbuf, sizeof(tbuf), "%.0f", convertTemp(midTemp, unit));
+        } else {
+            snprintf(tbuf, sizeof(tbuf), "%.0f" UI_SYMBOL_DEGREE, convertTemp(midTemp, unit));
+        }
+        lv_label_set_text(ppt_lbl_cb_mid, tbuf);
+
+        if (unit == TEMP_UNIT_KELVIN) {
+            snprintf(tbuf, sizeof(tbuf), "%.0f", convertTemp(minTemp, unit));
+        } else {
+            snprintf(tbuf, sizeof(tbuf), "%.0f" UI_SYMBOL_DEGREE, convertTemp(minTemp, unit));
+        }
+        lv_label_set_text(ppt_lbl_cb_min, tbuf);
+    }
 
     lv_obj_invalidate(img_ppt_feed);
 }
@@ -428,8 +538,9 @@ void updatePPTScreenInspect(
         lv_obj_invalidate(ppt_canvas_colorbar);
     }
 
-    lv_label_set_text(ppt_lbl_cb_max, "+pi");
-    lv_label_set_text(ppt_lbl_cb_min, "-pi");
+    lv_label_set_text(ppt_lbl_cb_max, "+" UI_SYMBOL_PI);
+    lv_label_set_text(ppt_lbl_cb_mid, " 0");
+    lv_label_set_text(ppt_lbl_cb_min, "-" UI_SYMBOL_PI);
 
     lv_obj_invalidate(img_ppt_feed);
 }

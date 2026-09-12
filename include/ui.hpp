@@ -8,6 +8,7 @@
 enum AppState {
     APP_STATE_BOOT = 0,         // Initial system boot screen
     APP_STATE_THERMAL_VIEW,     // Live sensor view with HUD/OSD overlays (default operating state)
+    APP_STATE_THERMAL_FREEZE,   // Frozen captured snapshot view
     APP_STATE_MAIN_MENU,        // Main menu navigation screen
     APP_STATE_SETTINGS,         // Settings & configuration screen
     APP_STATE_BRIGHTNESS,       // Dedicated display backlight brightness slider screen
@@ -111,6 +112,10 @@ AppState getAppState();
 void setAppState(AppState newState);
 
 void uiNavToThermal();
+void uiFreezeThermal();
+void uiUnfreezeThermal();
+bool isThermalFrozen();
+void uiTriggerSnapshotFlash();
 void uiNavToMainMenu();
 void uiNavToSettings(int focusIndex = 0);
 void uiNavToBrightness();
@@ -145,7 +150,7 @@ void updateThermalHUD(
     int vpW,
     int vpH
 );
-void updatePPTScreenArmed(float currentDt, float thresh);
+void updatePPTScreenArmed(float currentDt, float thresh, float minTemp = 0.0f, float maxTemp = 0.0f, TempUnit unit = TEMP_UNIT_CELSIUS, const uint16_t* activePalette = nullptr);
 void updatePPTScreenAcquiring(int currentFrame, int totalFrames);
 void updatePPTScreenInspect(
     int binK,
@@ -165,22 +170,28 @@ void updateScalingDesc(int idx);
 void updateSensorErrorAttempt(uint32_t attemptCount);
 void resetSensorErrorAttempt();
 
+// Fullscreen Thermal View Controls
+void uiEnterFullscreen();
+void uiExitFullscreen();
+bool uiIsFullscreen();
+void uiToggleFullscreen();
+
 // Accessors & Mutators
 lv_obj_t* getThermalImageObj();
 
-int getCameraRotationSetting();
 TempUnit getTempUnitSetting();
 PaletteType getPaletteSetting();
 bool getMirrorSetting();
 ScalingMode getScalingModeSetting();
 uint8_t getDisplayBrightnessSetting();
+uint32_t getI2CSpeedSetting();
 
-void setCameraRotationSetting(int rot);
 void setTempUnitSetting(TempUnit unit);
 void setPaletteSetting(PaletteType pal);
 void setMirrorSetting(bool mirror);
 void setScalingModeSetting(ScalingMode mode);
 void setDisplayBrightnessSetting(uint8_t percent);
+void setI2CSpeedSetting(uint32_t speedHz);
 
 // Shared Temperature Conversion Helpers
 float convertTemp(float tempC, TempUnit unit);

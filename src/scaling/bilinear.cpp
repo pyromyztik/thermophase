@@ -9,6 +9,7 @@ void ThermalScaler::renderBilinear(
     int vpX, int vpY, int vpW, int vpH, int canvasW,
     float smoothedMin, float invRange, const uint16_t* palette
 ) {
+    float offset = smoothedMin * invRange;
     for (int y = 0; y < vpH; ++y) {
         uint8_t y0 = m_rowBilinearTable[y].y0;
         uint8_t y1 = m_rowBilinearTable[y].y1;
@@ -29,7 +30,7 @@ void ThermalScaler::renderBilinear(
             float bot = r1[x0] + fx * (r1[x1] - r1[x0]);
             float temp = omfy * top + fy * bot;
 
-            int idx = (int)((temp - smoothedMin) * invRange);
+            int idx = (int)(temp * invRange - offset);
             if (idx < 0) idx = 0;
             else if (idx > 255) idx = 255;
 

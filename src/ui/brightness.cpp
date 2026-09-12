@@ -131,9 +131,12 @@ static void brightnessBackBtnEventCb(lv_event_t* e) {
 
     if (code == LV_EVENT_FOCUSED) {
         updateSliderVisualState(false, false);
-        if (back_arrow) lv_obj_clear_flag(back_arrow, LV_OBJ_FLAG_HIDDEN);
+        if (back_arrow) {
+            lv_obj_clear_flag(back_arrow, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_style_text_color(back_arrow, lv_color_black(), 0);
+        }
         if (slider_arrow) lv_obj_add_flag(slider_arrow, LV_OBJ_FLAG_HIDDEN);
-        if (brightness_back_label) lv_obj_set_style_text_color(brightness_back_label, UI_COLOR_ACCENT, 0);
+        if (brightness_back_label) lv_obj_set_style_text_color(brightness_back_label, lv_color_black(), 0);
         if (brightness_desc_label) lv_label_set_text(brightness_desc_label, "Return to settings menu.");
         if (brightness_footer_label) lv_label_set_text(brightness_footer_label, "[Rotate] Navigate   |   [Click] Back to Settings");
 
@@ -304,7 +307,7 @@ void buildBrightnessScreen() {
 
     back_arrow = lv_label_create(brightness_back_btn);
     lv_label_set_text(back_arrow, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_color(back_arrow, UI_COLOR_ACCENT, 0);
+    lv_obj_set_style_text_color(back_arrow, lv_color_black(), 0);
     lv_obj_set_style_text_font(back_arrow, &lv_font_montserrat_12, 0);
     lv_obj_align(back_arrow, LV_ALIGN_LEFT_MID, 0, 0);
     lv_obj_add_flag(back_arrow, LV_OBJ_FLAG_HIDDEN);

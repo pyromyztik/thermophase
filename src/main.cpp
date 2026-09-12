@@ -7,6 +7,7 @@
 #include "wheel.hpp"
 #include "ui.hpp"
 #include "power.hpp"
+#include "storage.hpp"
 
 // Global task handles
 TaskHandle_t sensorTaskHandle = NULL;
@@ -35,6 +36,9 @@ void setup() {
     Serial.println("\n========================================================");
     Serial.println("  ESP32-S3 Real-Time Bilinear Thermal Camera System");
     Serial.println("========================================================");
+
+    // Load user settings from ESP32 NVS (Preferences) before initializing Display & UI
+    loadSettings();
 
     // 1. Initialize ILI9341 Display & Bilinear tables FIRST and render Boot Screen
     // (TFT_LED is kept LOW until the boot screen is drawn in canvas and pushed to LCD memory)

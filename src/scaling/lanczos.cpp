@@ -24,6 +24,7 @@ void ThermalScaler::renderLanczos(
         }
     }
     // Vertical evaluation & direct palette mapping
+    float offset = smoothedMin * invRange;
     for (int y = 0; y < vpH; ++y) {
         const LanczosInterp& r = m_rowLanczosTable[y];
         const float* ir0 = &m_intermediateRows[r.idx[0] * vpW];
@@ -40,7 +41,7 @@ void ThermalScaler::renderLanczos(
                          r.w[2] * ir2[x] + r.w[3] * ir3[x] +
                          r.w[4] * ir4[x] + r.w[5] * ir5[x];
 
-            int idx = (int)((temp - smoothedMin) * invRange);
+            int idx = (int)(temp * invRange - offset);
             if (idx < 0) idx = 0;
             else if (idx > 255) idx = 255;
 

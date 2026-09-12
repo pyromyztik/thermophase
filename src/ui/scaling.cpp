@@ -57,7 +57,10 @@ static void scalingBtnEventCb(lv_event_t* e) {
             }
         }
         if (idx == 5) {
-            lv_obj_set_style_text_color(scalingNameLabels[5], UI_COLOR_ACCENT, 0);
+            lv_obj_set_style_text_color(scalingNameLabels[5], lv_color_black(), 0);
+            if (scalingArrows[5] != nullptr) {
+                lv_obj_set_style_text_color(scalingArrows[5], lv_color_black(), 0);
+            }
         } else if (scalingNameLabels[5] != nullptr) {
             lv_obj_set_style_text_color(scalingNameLabels[5], UI_COLOR_TEXT_DIM, 0);
         }
@@ -90,8 +93,8 @@ static void scalingBtnEventCb(lv_event_t* e) {
                 lv_anim_start(&a_val);
             }
         } else {
-            // Back to Settings screen (focused on item 5 "Upscaling")
-            uiNavToSettings(5);
+            // Back to Settings screen (focused on item 4 "Upscaling")
+            uiNavToSettings(4);
         }
     }
 }
@@ -189,10 +192,11 @@ void buildScalingScreen() {
         scalingArrows[i] = lv_label_create(scalingBtns[i]);
         if (i == 5) {
             lv_label_set_text(scalingArrows[i], LV_SYMBOL_LEFT);
+            lv_obj_set_style_text_color(scalingArrows[i], lv_color_black(), 0);
         } else {
             lv_label_set_text(scalingArrows[i], LV_SYMBOL_RIGHT);
+            lv_obj_set_style_text_color(scalingArrows[i], UI_COLOR_ACCENT, 0);
         }
-        lv_obj_set_style_text_color(scalingArrows[i], UI_COLOR_ACCENT, 0);
         lv_obj_set_style_text_font(scalingArrows[i], &lv_font_montserrat_12, 0);
         lv_obj_align(scalingArrows[i], LV_ALIGN_LEFT_MID, 0, 0);
         if (i != 0) lv_obj_add_flag(scalingArrows[i], LV_OBJ_FLAG_HIDDEN);

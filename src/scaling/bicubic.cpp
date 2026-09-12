@@ -23,6 +23,7 @@ void ThermalScaler::renderBicubic(
         }
     }
     // Vertical evaluation & direct palette mapping
+    float offset = smoothedMin * invRange;
     for (int y = 0; y < vpH; ++y) {
         const CubicInterp& rCubic = m_rowCubicTable[y];
         const float* ir0 = &m_intermediateRows[rCubic.idx0 * vpW];
@@ -38,7 +39,7 @@ void ThermalScaler::renderBicubic(
             float temp = rw0 * ir0[x] + rw1 * ir1[x] 
                        + rw2 * ir2[x] + rw3 * ir3[x];
 
-            int idx = (int)((temp - smoothedMin) * invRange);
+            int idx = (int)(temp * invRange - offset);
             if (idx < 0) idx = 0;
             else if (idx > 255) idx = 255;
 

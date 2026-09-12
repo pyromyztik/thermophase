@@ -150,7 +150,7 @@
 
 /* Montserrat fonts with ASCII range and some symbols using bpp = 4
  * https://fonts.google.com/specimen/Montserrat */
-#define LV_FONT_MONTSERRAT_8  0
+#define LV_FONT_MONTSERRAT_8  1
 #define LV_FONT_MONTSERRAT_10 1
 #define LV_FONT_MONTSERRAT_12 1
 #define LV_FONT_MONTSERRAT_14 1
@@ -180,6 +180,9 @@
 
 /* Set the pixel order of the font letter bitmap. Useful only on monochrome displays */
 #define LV_FONT_SUBPX_BGR 0
+
+/* Support compressed fonts */
+#define LV_USE_FONT_COMPRESSED 1
 
 /*================
  *  THEME USAGE

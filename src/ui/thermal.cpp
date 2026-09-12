@@ -17,6 +17,8 @@ static lv_obj_t* lbl_min_hdr = nullptr;
 static lv_obj_t* label_min_temp = nullptr;
 static lv_obj_t* lbl_max_hdr = nullptr;
 static lv_obj_t* label_max_temp = nullptr;
+static lv_obj_t* label_hint_left = nullptr;
+static lv_obj_t* label_hint_right = nullptr;
 static lv_obj_t* label_fps = nullptr;
 static lv_obj_t* label_scaling_mode = nullptr;
 static lv_obj_t* canvas_colorbar = nullptr;
@@ -25,14 +27,133 @@ static lv_obj_t* label_colorbar_max = nullptr;
 static lv_obj_t* label_colorbar_mid = nullptr;
 static lv_obj_t* label_colorbar_min = nullptr;
 
-// Fullscreen Overlays (for stretched mode)
-static lv_obj_t* hud_fs_center_badge = nullptr;
-static lv_obj_t* label_fs_center = nullptr;
-static lv_obj_t* hud_fs_range_badge = nullptr;
-static lv_obj_t* label_fs_min = nullptr;
-static lv_obj_t* label_fs_max = nullptr;
-static lv_obj_t* hud_fs_fps_badge = nullptr;
-static lv_obj_t* label_fs_fps = nullptr;
+// Fullscreen Control Hint
+static lv_obj_t* fs_escape_hint_badge = nullptr;
+static lv_obj_t* fs_escape_hint_label = nullptr;
+static bool thermalIsFullscreen = false;
+
+// Snapshot Capture Flash Rectangle
+static lv_obj_t* snapshot_flash_rect = nullptr;
+
+void uiTriggerSnapshotFlash() {
+    if (snapshot_flash_rect == nullptr) return;
+
+    // Reposition flash rectangle according to current mode (fullscreen vs windowed)
+    if (thermalIsFullscreen) {
+        lv_obj_set_pos(snapshot_flash_rect, 0, 0);
+        lv_obj_set_size(snapshot_flash_rect, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    } else {
+        lv_obj_set_pos(snapshot_flash_rect, 70, 0);
+        lv_obj_set_size(snapshot_flash_rect, 180, 240);
+    }
+
+    // Cancel any ongoing flash animation and start fresh
+    lv_anim_del(snapshot_flash_rect, NULL);
+    lv_obj_set_style_border_opa(snapshot_flash_rect, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(snapshot_flash_rect, LV_OBJ_FLAG_HIDDEN);
+
+    // Fade border opacity from 255 (LV_OPA_COVER) down to 0 over 1500ms (1.5 seconds)
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, snapshot_flash_rect);
+    lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_TRANSP);
+    lv_anim_set_time(&a, 1500);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_set_exec_cb(&a, [](void* var, int32_t val) {
+        lv_obj_set_style_border_opa((lv_obj_t*)var, (lv_opa_t)val, 0);
+    });
+    lv_anim_set_ready_cb(&a, [](lv_anim_t* anim) {
+        lv_obj_add_flag((lv_obj_t*)anim->var, LV_OBJ_FLAG_HIDDEN);
+    });
+    lv_anim_start(&a);
+
+    Serial.println("[UI] Snapshot capture flash triggered (1.5s fade)");
+}
+
+bool uiIsFullscreen() {
+    return thermalIsFullscreen;
+}
+
+void uiEnterFullscreen() {
+    if (thermalIsFullscreen) return;
+    thermalIsFullscreen = true;
+
+    if (hud_left_panel) lv_obj_add_flag(hud_left_panel, LV_OBJ_FLAG_HIDDEN);
+    if (hud_right_panel) lv_obj_add_flag(hud_right_panel, LV_OBJ_FLAG_HIDDEN);
+
+    if (img_thermal_feed) {
+        lv_obj_set_pos(img_thermal_feed, 0, 0);
+        lv_obj_set_size(img_thermal_feed, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+        thermal_img_dsc.header.w = DISPLAY_WIDTH;
+        thermal_img_dsc.header.h = DISPLAY_HEIGHT;
+        thermal_img_dsc.data_size = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(lv_color_t);
+        lv_img_set_src(img_thermal_feed, &thermal_img_dsc);
+    }
+
+    if (thermal_reticle_container) {
+        lv_obj_set_pos(thermal_reticle_container, (DISPLAY_WIDTH / 2) - 7, (DISPLAY_HEIGHT / 2) - 7);
+    }
+
+    if (fs_escape_hint_badge) {
+        lv_anim_del(fs_escape_hint_badge, NULL);
+        lv_obj_set_pos(fs_escape_hint_badge, (DISPLAY_WIDTH - 180) / 2, 208);
+        lv_obj_clear_flag(fs_escape_hint_badge, LV_OBJ_FLAG_HIDDEN);
+
+        // Slide down offscreen after 4 seconds (4000ms delay, 350ms duration)
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, fs_escape_hint_badge);
+        lv_anim_set_values(&a, 208, 245);
+        lv_anim_set_time(&a, 350);
+        lv_anim_set_delay(&a, 4000);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_in);
+        lv_anim_set_exec_cb(&a, [](void* var, int32_t val) {
+            lv_obj_set_y((lv_obj_t*)var, val);
+        });
+        lv_anim_set_ready_cb(&a, [](lv_anim_t* anim) {
+            lv_obj_add_flag((lv_obj_t*)anim->var, LV_OBJ_FLAG_HIDDEN);
+        });
+        lv_anim_start(&a);
+    }
+
+    Serial.println("[UI] Entered Fullscreen Thermal View (320x240, Rotated 90 deg)");
+}
+
+void uiExitFullscreen() {
+    if (!thermalIsFullscreen) return;
+    thermalIsFullscreen = false;
+
+    if (fs_escape_hint_badge) {
+        lv_anim_del(fs_escape_hint_badge, NULL);
+        lv_obj_add_flag(fs_escape_hint_badge, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    if (img_thermal_feed) {
+        lv_obj_set_pos(img_thermal_feed, 70, 0);
+        lv_obj_set_size(img_thermal_feed, 180, 240);
+        thermal_img_dsc.header.w = 180;
+        thermal_img_dsc.header.h = 240;
+        thermal_img_dsc.data_size = 180 * 240 * sizeof(lv_color_t);
+        lv_img_set_src(img_thermal_feed, &thermal_img_dsc);
+    }
+
+    if (hud_left_panel) lv_obj_clear_flag(hud_left_panel, LV_OBJ_FLAG_HIDDEN);
+    if (hud_right_panel) lv_obj_clear_flag(hud_right_panel, LV_OBJ_FLAG_HIDDEN);
+
+    if (thermal_reticle_container) {
+        lv_obj_set_pos(thermal_reticle_container, (DISPLAY_WIDTH / 2) - 7, (DISPLAY_HEIGHT / 2) - 7);
+    }
+
+    Serial.println("[UI] Exited Fullscreen Thermal View -> Restored 180x240 Portrait View");
+}
+
+void uiToggleFullscreen() {
+    if (thermalIsFullscreen) {
+        uiExitFullscreen();
+    } else {
+        uiEnterFullscreen();
+    }
+}
 
 lv_obj_t* getThermalImageObj() {
     return img_thermal_feed;
@@ -153,6 +274,13 @@ void buildThermalScreen() {
     lv_obj_set_style_text_font(label_max_temp, &lv_font_montserrat_12, 0);
     lv_obj_align(label_max_temp, LV_ALIGN_TOP_LEFT, 2, 158);
 
+    // Left Control hint in bottom-left black bar
+    label_hint_left = lv_label_create(hud_left_panel);
+    lv_label_set_text(label_hint_left, "[Click] Snap");
+    lv_obj_set_style_text_color(label_hint_left, UI_COLOR_TEXT_DIM, 0);
+    lv_obj_set_style_text_font(label_hint_left, &lv_font_montserrat_8, 0);
+    lv_obj_align(label_hint_left, LV_ALIGN_BOTTOM_LEFT, 2, -6);
+
     // 4. Side HUD Panel: RIGHT (FPS, Scaler Mode & Color Bar)
     hud_right_panel = lv_obj_create(screen_thermal);
     lv_obj_set_pos(hud_right_panel, 250, 0);
@@ -204,62 +332,46 @@ void buildThermalScreen() {
     lv_obj_set_style_text_font(label_colorbar_min, &lv_font_montserrat_10, 0);
     lv_obj_align(label_colorbar_min, LV_ALIGN_TOP_LEFT, 26, 184);
 
-    // 5. Fullscreen Overlay Badges (Hidden initially, shown when aspect ratio stretched)
-    hud_fs_center_badge = lv_obj_create(screen_thermal);
-    lv_obj_set_size(hud_fs_center_badge, 110, 22);
-    lv_obj_align(hud_fs_center_badge, LV_ALIGN_TOP_MID, 0, 6);
-    lv_obj_set_style_bg_color(hud_fs_center_badge, UI_COLOR_BG, 0);
-    lv_obj_set_style_border_color(hud_fs_center_badge, UI_COLOR_BORDER, 0);
-    lv_obj_set_style_border_width(hud_fs_center_badge, 1, 0);
-    lv_obj_set_style_radius(hud_fs_center_badge, 0, 0);
-    lv_obj_clear_flag(hud_fs_center_badge, LV_OBJ_FLAG_SCROLLABLE);
+    // Right Control hint in bottom-right black bar
+    label_hint_right = lv_label_create(hud_right_panel);
+    lv_label_set_text(label_hint_right, "[Hold] Menu");
+    lv_obj_set_style_text_color(label_hint_right, UI_COLOR_TEXT_DIM, 0);
+    lv_obj_set_style_text_font(label_hint_right, &lv_font_montserrat_8, 0);
+    lv_obj_align(label_hint_right, LV_ALIGN_BOTTOM_LEFT, 4, -6);
 
-    label_fs_center = lv_label_create(hud_fs_center_badge);
-    lv_label_set_text(label_fs_center, "+ --.- " UI_SYMBOL_DEGREE "C");
-    lv_obj_center(label_fs_center);
-    lv_obj_set_style_text_color(label_fs_center, UI_COLOR_TEXT, 0);
-    lv_obj_set_style_text_font(label_fs_center, &lv_font_montserrat_12, 0);
+    // 5. Fullscreen Escape Hint Badge (Centred at bottom, hidden initially)
+    fs_escape_hint_badge = lv_obj_create(screen_thermal);
+    lv_obj_set_size(fs_escape_hint_badge, 180, 24);
+    lv_obj_set_pos(fs_escape_hint_badge, (DISPLAY_WIDTH - 180) / 2, 208);
+    lv_obj_set_style_bg_color(fs_escape_hint_badge, UI_COLOR_BG, 0);
+    lv_obj_set_style_bg_opa(fs_escape_hint_badge, LV_OPA_80, 0);
+    lv_obj_set_style_border_color(fs_escape_hint_badge, UI_COLOR_BORDER, 0);
+    lv_obj_set_style_border_width(fs_escape_hint_badge, 1, 0);
+    lv_obj_set_style_radius(fs_escape_hint_badge, 4, 0);
+    lv_obj_set_style_pad_all(fs_escape_hint_badge, 0, 0);
+    lv_obj_clear_flag(fs_escape_hint_badge, LV_OBJ_FLAG_SCROLLABLE);
 
-    hud_fs_range_badge = lv_obj_create(screen_thermal);
-    lv_obj_set_size(hud_fs_range_badge, 160, 22);
-    lv_obj_align(hud_fs_range_badge, LV_ALIGN_BOTTOM_LEFT, 6, -6);
-    lv_obj_set_style_bg_color(hud_fs_range_badge, UI_COLOR_BG, 0);
-    lv_obj_set_style_border_color(hud_fs_range_badge, UI_COLOR_BORDER, 0);
-    lv_obj_set_style_border_width(hud_fs_range_badge, 1, 0);
-    lv_obj_set_style_radius(hud_fs_range_badge, 0, 0);
-    lv_obj_clear_flag(hud_fs_range_badge, LV_OBJ_FLAG_SCROLLABLE);
+    fs_escape_hint_label = lv_label_create(fs_escape_hint_badge);
+    lv_label_set_text(fs_escape_hint_label, "[Dbl-Click] Exit Fullscreen");
+    lv_obj_center(fs_escape_hint_label);
+    lv_obj_set_style_text_color(fs_escape_hint_label, UI_COLOR_TEXT, 0);
+    lv_obj_set_style_text_font(fs_escape_hint_label, &lv_font_montserrat_10, 0);
 
-    label_fs_min = lv_label_create(hud_fs_range_badge);
-    lv_label_set_text(label_fs_min, "Min: --.- " UI_SYMBOL_DEGREE "C");
-    lv_obj_align(label_fs_min, LV_ALIGN_LEFT_MID, 4, 0);
-    lv_obj_set_style_text_color(label_fs_min, UI_COLOR_CYAN, 0);
-    lv_obj_set_style_text_font(label_fs_min, &lv_font_montserrat_10, 0);
+    lv_obj_add_flag(fs_escape_hint_badge, LV_OBJ_FLAG_HIDDEN);
 
-    label_fs_max = lv_label_create(hud_fs_range_badge);
-    lv_label_set_text(label_fs_max, "Max: --.- " UI_SYMBOL_DEGREE "C");
-    lv_obj_align(label_fs_max, LV_ALIGN_RIGHT_MID, -4, 0);
-    lv_obj_set_style_text_color(label_fs_max, UI_COLOR_ORANGE, 0);
-    lv_obj_set_style_text_font(label_fs_max, &lv_font_montserrat_10, 0);
-
-    hud_fs_fps_badge = lv_obj_create(screen_thermal);
-    lv_obj_set_size(hud_fs_fps_badge, 90, 22);
-    lv_obj_align(hud_fs_fps_badge, LV_ALIGN_TOP_RIGHT, -6, 6);
-    lv_obj_set_style_bg_color(hud_fs_fps_badge, UI_COLOR_BG, 0);
-    lv_obj_set_style_border_color(hud_fs_fps_badge, UI_COLOR_GREEN, 0);
-    lv_obj_set_style_border_width(hud_fs_fps_badge, 1, 0);
-    lv_obj_set_style_radius(hud_fs_fps_badge, 0, 0);
-    lv_obj_clear_flag(hud_fs_fps_badge, LV_OBJ_FLAG_SCROLLABLE);
-
-    label_fs_fps = lv_label_create(hud_fs_fps_badge);
-    lv_label_set_text(label_fs_fps, "--.- BICUB");
-    lv_obj_center(label_fs_fps);
-    lv_obj_set_style_text_color(label_fs_fps, UI_COLOR_GREEN, 0);
-    lv_obj_set_style_text_font(label_fs_fps, &lv_font_montserrat_10, 0);
-
-    // Hide fullscreen overlays by default (visible only if viewport is 320x240)
-    lv_obj_add_flag(hud_fs_center_badge, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(hud_fs_range_badge, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(hud_fs_fps_badge, LV_OBJ_FLAG_HIDDEN);
+    // 6. Snapshot Capture White Flash Rectangle (Border around thermal view)
+    snapshot_flash_rect = lv_obj_create(screen_thermal);
+    lv_obj_set_pos(snapshot_flash_rect, 70, 0);
+    lv_obj_set_size(snapshot_flash_rect, 180, 240);
+    lv_obj_set_style_bg_opa(snapshot_flash_rect, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_color(snapshot_flash_rect, lv_color_white(), 0);
+    lv_obj_set_style_border_width(snapshot_flash_rect, 4, 0);
+    lv_obj_set_style_border_opa(snapshot_flash_rect, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(snapshot_flash_rect, 0, 0);
+    lv_obj_set_style_pad_all(snapshot_flash_rect, 0, 0);
+    lv_obj_clear_flag(snapshot_flash_rect, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(snapshot_flash_rect, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(snapshot_flash_rect, LV_OBJ_FLAG_HIDDEN);
 }
 
 void updateThermalHUD(
@@ -289,15 +401,9 @@ void updateThermalHUD(
         if (vpX > 0) {
             lv_obj_clear_flag(hud_left_panel, LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(hud_right_panel, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(hud_fs_center_badge, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(hud_fs_range_badge, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(hud_fs_fps_badge, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(hud_left_panel, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(hud_right_panel, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(hud_fs_center_badge, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(hud_fs_range_badge, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(hud_fs_fps_badge, LV_OBJ_FLAG_HIDDEN);
         }
 
         // Align reticle with the optical center of the thermal viewport
@@ -324,18 +430,41 @@ void updateThermalHUD(
         lv_obj_invalidate(canvas_colorbar);
     }
 
-    // Throttle label text glyph re-rasterization to ~7 Hz (140 ms).
+    bool isFrozen = (getAppState() == APP_STATE_THERMAL_FREEZE);
+    static bool lastWasFrozen = false;
+    bool stateChanged = (isFrozen != lastWasFrozen);
+    lastWasFrozen = isFrozen;
+
+    // Throttle label text glyph re-rasterization to ~7 Hz (140 ms), but update immediately on freeze/unfreeze
     static uint32_t lastHudTextUpdate = 0;
     uint32_t hudNow = millis();
-    bool updateText = (hudNow - lastHudTextUpdate >= 140);
+    bool updateText = (hudNow - lastHudTextUpdate >= 140) || stateChanged;
 
     if (updateText) {
         lastHudTextUpdate = hudNow;
 
         if (vpX > 0) {
             if (title_thm != nullptr) {
-                lv_label_set_text(title_thm, "THERMAL");
-                lv_obj_set_style_text_color(title_thm, UI_COLOR_YELLOW, 0);
+                if (isFrozen) {
+                    lv_label_set_text(title_thm, "[HOLD]");
+                    lv_obj_set_style_text_color(title_thm, UI_COLOR_CYAN, 0);
+                } else {
+                    lv_label_set_text(title_thm, "THERMAL");
+                    lv_obj_set_style_text_color(title_thm, UI_COLOR_YELLOW, 0);
+                }
+            }
+            if (label_hint_left != nullptr) {
+                if (isFrozen) {
+                    lv_label_set_text(label_hint_left, "[Click] Live");
+                    lv_obj_set_style_text_color(label_hint_left, UI_COLOR_CYAN, 0);
+                } else {
+                    lv_label_set_text(label_hint_left, "[Click] Snap");
+                    lv_obj_set_style_text_color(label_hint_left, UI_COLOR_TEXT_DIM, 0);
+                }
+            }
+            if (label_hint_right != nullptr) {
+                lv_label_set_text(label_hint_right, "[Hold] Menu");
+                lv_obj_set_style_text_color(label_hint_right, UI_COLOR_TEXT_DIM, 0);
             }
             if (lbl_cnt != nullptr) lv_label_set_text(lbl_cnt, "CENTER");
             if (lbl_min_hdr != nullptr) lv_label_set_text(lbl_min_hdr, "MIN TEMP");
@@ -358,8 +487,14 @@ void updateThermalHUD(
             snprintf(buf, sizeof(buf), "%.1f %s", convertTemp(maxTemp, unit), uSym);
             lv_label_set_text(label_max_temp, buf);
 
-            snprintf(buf, sizeof(buf), "%.1f FPS", fps);
-            lv_label_set_text(label_fps, buf);
+            if (isFrozen) {
+                lv_label_set_text(label_fps, "HOLD");
+                lv_obj_set_style_text_color(label_fps, UI_COLOR_CYAN, 0);
+            } else {
+                snprintf(buf, sizeof(buf), "%.1f FPS", fps);
+                lv_label_set_text(label_fps, buf);
+                lv_obj_set_style_text_color(label_fps, UI_COLOR_GREEN, 0);
+            }
 
             lv_label_set_text(label_scaling_mode, modeNames[mode % 5]);
 
@@ -384,21 +519,6 @@ void updateThermalHUD(
                 snprintf(buf, sizeof(buf), "%.0f" UI_SYMBOL_DEGREE, convertTemp(minTemp, unit));
             }
             lv_label_set_text(label_colorbar_min, buf);
-
-        } else {
-            // Update Fullscreen Badges
-            char buf[32];
-            snprintf(buf, sizeof(buf), "+ %.1f %s", convertTemp(centerTemp, unit), uSym);
-            lv_label_set_text(label_fs_center, buf);
-
-            snprintf(buf, sizeof(buf), "Min:%.1f %s", convertTemp(minTemp, unit), uSym);
-            lv_label_set_text(label_fs_min, buf);
-
-            snprintf(buf, sizeof(buf), "Max:%.1f %s", convertTemp(maxTemp, unit), uSym);
-            lv_label_set_text(label_fs_max, buf);
-
-            snprintf(buf, sizeof(buf), "%.1f %s", fps, modeNames[mode % 5]);
-            lv_label_set_text(label_fs_fps, buf);
         }
     }
 

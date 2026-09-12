@@ -7,6 +7,30 @@
 
 Adafruit_MLX90640 mlx;
 
+// Runtime configurable I2C bus speed
+static volatile uint32_t currentSensorI2CSpeed = I2C_FREQ_RUN;
+
+void setSensorI2CSpeed(uint32_t speedHz) {
+    if (speedHz != currentSensorI2CSpeed) {
+        currentSensorI2CSpeed = speedHz;
+        if (globalSensorStatus == SENSOR_OK) {
+            Wire.setClock(speedHz);
+            // 400kHz I2C cannot transfer 32 subpages/sec (takes ~42ms > 31.25ms period).
+            // Coordinate sensor refresh rate so 400kHz never overflows the bus.
+            if (speedHz <= I2C_SPEED_400K) {
+                mlx.setRefreshRate(MLX90640_16_HZ);
+            } else {
+                mlx.setRefreshRate(THERMAL_REFRESH_RATE);
+            }
+            Serial.printf("[MLX90640] I2C Clock updated dynamically to %lu Hz\n", speedHz);
+        }
+    }
+}
+
+uint32_t getSensorI2CSpeed() {
+    return currentSensorI2CSpeed;
+}
+
 // Shared thread-safe frame double-buffer
 static ThermalFrame sharedFrame;
 static SemaphoreHandle_t frameMutex = NULL;
@@ -85,12 +109,16 @@ bool initThermalSensor() {
 
     Serial.println("[MLX90640] Sensor detected successfully!");
 
-    // Switch to 800kHz for high-speed streaming
-    Wire.setClock(I2C_FREQ_RUN);
+    // Switch to configured speed for streaming (400kHz clean or 800kHz fast)
+    Wire.setClock(currentSensorI2CSpeed);
 
     mlx.setMode(MLX90640_CHESS);
     mlx.setResolution(MLX90640_ADC_18BIT);
-    mlx.setRefreshRate(THERMAL_REFRESH_RATE);
+    if (currentSensorI2CSpeed <= I2C_SPEED_400K && THERMAL_REFRESH_RATE > MLX90640_16_HZ) {
+        mlx.setRefreshRate(MLX90640_16_HZ);
+    } else {
+        mlx.setRefreshRate(THERMAL_REFRESH_RATE);
+    }
 
     // Warm-up sensor: read 2 initial subpages so both chess subpages are primed
     float warmupBuf[SENSOR_PIXELS];
@@ -148,6 +176,64 @@ static void balanceChessSubpages(float* temps) {
     }
 }
 
+// Detect and repair corrupted pixels, dead sensor elements, and NaNs/Infs.
+void cleanSensorOutliers(float* temps) {
+    for (int r = 0; r < SENSOR_HEIGHT; ++r) {
+        for (int c = 0; c < SENSOR_WIDTH; ++c) {
+            int idx = r * SENSOR_WIDTH + c;
+            float val = temps[idx];
+            bool isBad = !std::isfinite(val) || val < -40.0f || val > 350.0f;
+
+            if (isBad) {
+                // Heal bad pixel by replacing with surrounding valid neighbors median
+                float nVals[8];
+                int nCount = 0;
+                for (int dr = -1; dr <= 1; ++dr) {
+                    int nr = r + dr;
+                    if (nr < 0 || nr >= SENSOR_HEIGHT) continue;
+                    for (int dc = -1; dc <= 1; ++dc) {
+                        if (dr == 0 && dc == 0) continue;
+                        int nc = c + dc;
+                        if (nc < 0 || nc >= SENSOR_WIDTH) continue;
+                        float nVal = temps[nr * SENSOR_WIDTH + nc];
+                        if (std::isfinite(nVal) && nVal > -40.0f && nVal < 350.0f) {
+                            nVals[nCount++] = nVal;
+                        }
+                    }
+                }
+                if (nCount > 0) {
+                    std::nth_element(nVals, nVals + nCount / 2, nVals + nCount);
+                    temps[idx] = nVals[nCount / 2];
+                } else {
+                    temps[idx] = 25.0f;
+                }
+            }
+        }
+    }
+}
+
+// 3x3 edge-preserving median filter on 32x24 raw thermal grid
+// Eliminates high-frequency noise and residual chess pattern while preserving true physical boundaries
+void filterSnapshotFrame(const float* src, float* dst) {
+    float window[9];
+    for (int r = 0; r < SENSOR_HEIGHT; ++r) {
+        for (int c = 0; c < SENSOR_WIDTH; ++c) {
+            int count = 0;
+            for (int dr = -1; dr <= 1; ++dr) {
+                int nr = r + dr;
+                if (nr < 0 || nr >= SENSOR_HEIGHT) continue;
+                for (int dc = -1; dc <= 1; ++dc) {
+                    int nc = c + dc;
+                    if (nc < 0 || nc >= SENSOR_WIDTH) continue;
+                    window[count++] = src[nr * SENSOR_WIDTH + nc];
+                }
+            }
+            std::nth_element(window, window + count / 2, window + count);
+            dst[r * SENSOR_WIDTH + c] = window[count / 2];
+        }
+    }
+}
+
 void thermalSensorTask(void *pvParameters) {
     Serial.println("[TASK] Thermal Sensor Task started on Core " + String(xPortGetCoreID()));
 
@@ -173,10 +259,14 @@ void thermalSensorTask(void *pvParameters) {
             Wire.setClock(I2C_FREQ_INIT);
 
             if (mlx.begin(MLX90640_I2CADDR_DEFAULT, &Wire)) {
-                Wire.setClock(I2C_FREQ_RUN);
+                Wire.setClock(currentSensorI2CSpeed);
                 mlx.setMode(MLX90640_CHESS);
                 mlx.setResolution(MLX90640_ADC_18BIT);
-                mlx.setRefreshRate(THERMAL_REFRESH_RATE);
+                if (currentSensorI2CSpeed <= I2C_SPEED_400K && THERMAL_REFRESH_RATE > MLX90640_16_HZ) {
+                    mlx.setRefreshRate(MLX90640_16_HZ);
+                } else {
+                    mlx.setRefreshRate(THERMAL_REFRESH_RATE);
+                }
 
                 globalSensorStatus = SENSOR_OK;
                 consecutiveErrors = 0;
@@ -196,6 +286,9 @@ void thermalSensorTask(void *pvParameters) {
 
         if (status == 0) {
             consecutiveErrors = 0;
+
+            // 0. Detect and repair bad/corrupted pixels and impulse spikes
+            cleanSensorOutliers(localFrame.temperatures);
 
             // 1. Balance subpages (inter-subpage spatial chess offset correction)
             balanceChessSubpages(localFrame.temperatures);

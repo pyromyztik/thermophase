@@ -12,7 +12,9 @@
 #define PIN_I2C_SDA       8
 #define PIN_I2C_SCL       9
 #define I2C_FREQ_INIT     400000
-#define I2C_FREQ_RUN      800000
+#define I2C_SPEED_400K    400000
+#define I2C_SPEED_800K    800000
+#define I2C_FREQ_RUN      I2C_SPEED_800K
 
 // ILI9341 SPI Display Pins (as in TFT Display Test)
 #define TFT_CS            1   // Chip Select
@@ -72,9 +74,10 @@
 
 // MLX90640 Refresh Rate:
 // NOTE: Adafruit_MLX90640::getFrame() reads TWO subpages (0 & 1) to calculate each full frame.
-// - MLX90640_16_HZ -> 16 subpages/s / 2 = ~8 FPS  (matches default MLX90640 rate)
-// - MLX90640_32_HZ -> 32 subpages/s / 2 = ~11-13 FPS (used in MLX90640 Test to achieve 10-12 FPS)
-// - MLX90640_64_HZ -> 64 subpages/s / 2 = ~16-18 FPS (achieves full 16 FPS) (nope)
+// - MLX90640_16_HZ -> 16 subpages/s / 2 = ~8 FPS  (maximum reliable rate at 400 kHz I2C)
+// - MLX90640_32_HZ -> 32 subpages/s / 2 = ~11-13 FPS (maximum reliable rate at 800 kHz I2C)
+// - MLX90640_64_HZ -> INCOMPATIBLE (reading 1668 bytes over I2C takes ~21ms at 800kHz, which exceeds 
+//                      the 15.6ms 64Hz period, causing permanent I2C bus overrun collisions!)
 #define THERMAL_REFRESH_RATE MLX90640_32_HZ
 
 
@@ -82,17 +85,10 @@
 // ==========================================================
 // CAMERA ROTATION & ORIENTATION
 // ==========================================================
-// Thermal feed rotation options:
-// 0 = 0 degrees (original sensor orientation)
-// 1 = 90 degrees clockwise
-// 2 = 180 degrees (upside down)
-// 3 = 270 degrees clockwise (90 degrees counter-clockwise)
+// Default physical camera orientation:
+// 3 = 270 degrees clockwise (portrait 24x32 for handheld use)
+// (Double-clicking the wheel toggles 320x240 landscape fullscreen mode)
 #define CAMERA_ROTATION   3
-
-// When rotated 90 or 270 degrees on a 320x240 landscape display:
-// - false: Preserves true 3:4 aspect ratio (180x240 centered) with dedicated side panels for HUD & color bar 
-// - true : Stretches the rotated 24x32 feed to fill the entire 320x240 screen
-#define STRETCH_ROTATED_IMAGE false
 
 // Flip horizontally (mirror) if needed
 #define MIRROR_HORIZONTAL false

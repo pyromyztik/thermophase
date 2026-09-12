@@ -57,7 +57,8 @@ static lv_disp_draw_buf_t draw_buf;
 static lv_disp_drv_t disp_drv;
 static lv_indev_drv_t indev_drv;
 
-// Rotate the raw 32x24 sensor array to the specified orientation and mirror mode
+// Rotate the raw 32x24 sensor array to the specified orientation and mirror mode:
+// rotation 3 = portrait (24x32), rotation 0 = fullscreen landscape (32x24)
 static void rotateSensorFrame(const float* src, float* dst, int rotation, bool mirror) {
     if (rotation == 0) {
         for (int r = 0; r < 24; ++r) {
@@ -66,25 +67,8 @@ static void rotateSensorFrame(const float* src, float* dst, int rotation, bool m
                 dst[r * 32 + c] = src[r * 32 + screen_c];
             }
         }
-    } else if (rotation == 1) {
-        for (int r = 0; r < 32; ++r) {
-            for (int c = 0; c < 24; ++c) {
-                int screen_c = mirror ? (23 - c) : c;
-                int orig_r = 23 - screen_c;
-                int orig_c = r;
-                dst[r * 24 + c] = src[orig_r * 32 + orig_c];
-            }
-        }
-    } else if (rotation == 2) {
-        for (int r = 0; r < 24; ++r) {
-            for (int c = 0; c < 32; ++c) {
-                int screen_c = mirror ? (31 - c) : c;
-                int orig_r = 23 - r;
-                int orig_c = 31 - screen_c;
-                dst[r * 32 + c] = src[orig_r * 32 + orig_c];
-            }
-        }
-    } else if (rotation == 3) {
+    } else {
+        // rotation == 3 (default portrait)
         for (int r = 0; r < 32; ++r) {
             for (int c = 0; c < 24; ++c) {
                 int screen_c = mirror ? (23 - c) : c;
@@ -99,20 +83,13 @@ static void rotateSensorFrame(const float* src, float* dst, int rotation, bool m
 // Dynamically recompute viewport dimensions and interpolation coefficients
 static void recomputeBilinearTables(int rotation) {
     currentCameraRotation = rotation;
-    if (rotation == 1 || rotation == 3) {
+    if (rotation == 3) {
         gridW = SENSOR_HEIGHT; // 24
         gridH = SENSOR_WIDTH;  // 32
-        #if STRETCH_ROTATED_IMAGE
-        vpW = DISPLAY_WIDTH;
-        vpH = DISPLAY_HEIGHT;
-        vpX = 0;
-        vpY = 0;
-        #else
         vpH = DISPLAY_HEIGHT;                 // 240
         vpW = (vpH * gridW) / gridH;          // 180
         vpX = (DISPLAY_WIDTH - vpW) / 2;      // 70 px left margin
         vpY = 0;
-        #endif
     } else {
         gridW = SENSOR_WIDTH;  // 32
         gridH = SENSOR_HEIGHT; // 24
@@ -197,7 +174,7 @@ static void initAllPalettes() {
     initIronbowPalette();
     initWhiteHotPalette();
     initRainbowPalette();
-    activePalette = ironbowPalette;
+    updatePalette(currentPaletteType);
 }
 
 // Accessors
@@ -205,9 +182,6 @@ uint16_t* getThermalFrameBuffer() { return thermalFrameBuffer; }
 const uint16_t* getActivePalette() { return activePalette; }
 
 // Settings mutators
-void updateCameraRotation(int rotation) {
-    recomputeBilinearTables(rotation);
-}
 void updateTempUnit(TempUnit unit) {
     currentTempUnit = unit;
 }
@@ -227,6 +201,9 @@ void updateScalingMode(ScalingMode mode) {
 }
 ScalingMode getScalingMode() {
     return currentScalingMode;
+}
+void resetScalerHistory() {
+    scaler.reset();
 }
 
 static uint8_t currentDisplayBrightness = TFT_DEFAULT_BRIGHTNESS;
@@ -276,6 +253,10 @@ static void disp_flush_cb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t*
     lv_disp_flush_ready(drv);
 }
 
+// Double-click and single-click detection variables
+static uint32_t lastWheelClickTime = 0;
+static bool pendingWheelSingleClick = false;
+
 // LVGL Rotary Wheel Input Callback
 static void wheel_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
     static int32_t last_diff = 0;
@@ -286,10 +267,50 @@ static void wheel_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
         AppState state = getAppState();
         if (state == APP_STATE_THERMAL_VIEW) {
             if (evt == WHEEL_EVENT_CLICK) {
-                // Click in thermal view transitions to Main Menu.
+                uint32_t now = millis();
+                if (now - lastWheelClickTime <= 350) {
+                    // Double click detected! Toggle fullscreen
+                    pendingWheelSingleClick = false;
+                    lastWheelClickTime = 0;
+                    uiToggleFullscreen();
+                    if (displayTaskHandle != NULL) {
+                        xTaskNotifyGive(displayTaskHandle);
+                    }
+                } else {
+                    lastWheelClickTime = now;
+                    pendingWheelSingleClick = true;
+                }
+            } else if (evt == WHEEL_EVENT_LONG_PRESS) {
+                pendingWheelSingleClick = false;
+                lastWheelClickTime = 0;
+                if (uiIsFullscreen()) {
+                    uiExitFullscreen();
+                }
+                // Long press opens Main Menu
                 uiNavToMainMenu();
+                break;
+            }
+        } else if (state == APP_STATE_THERMAL_FREEZE) {
+            if (evt == WHEEL_EVENT_CLICK) {
+                // Short click in frozen view unfreezes and resumes live feed
+                pendingWheelSingleClick = false;
+                lastWheelClickTime = 0;
+                uiUnfreezeThermal();
+                if (displayTaskHandle != NULL) {
+                    xTaskNotifyGive(displayTaskHandle);
+                }
+            } else if (evt == WHEEL_EVENT_LONG_PRESS) {
+                pendingWheelSingleClick = false;
+                lastWheelClickTime = 0;
+                if (uiIsFullscreen()) {
+                    uiExitFullscreen();
+                }
+                uiNavToMainMenu();
+                break;
             }
         } else if (state == APP_STATE_PPT_ARMED || state == APP_STATE_PPT_ACQUIRING || state == APP_STATE_PPT_INSPECT) {
+            pendingWheelSingleClick = false;
+            lastWheelClickTime = 0;
             if (evt == WHEEL_EVENT_LONG_PRESS) {
                 // Long press (>= 600ms) exits immediately to Main Menu from all PPT states
                 uiNavToMainMenu();
@@ -323,6 +344,8 @@ static void wheel_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
                 }
             }
         } else {
+            pendingWheelSingleClick = false;
+            lastWheelClickTime = 0;
             // In Main Menu or Settings
             if (evt == WHEEL_EVENT_ROT_CW) {
                 last_diff += 1;
@@ -460,6 +483,14 @@ void displayTask(void *pvParameters) {
         + String(xPortGetCoreID()));
 
     ThermalFrame currentFrame;
+    static ThermalFrame lastValidFrame = {};
+    for (size_t i = 0; i < SENSOR_PIXELS; ++i) {
+        lastValidFrame.temperatures[i] = 25.0f;
+    }
+    lastValidFrame.centerTemp = 25.0f;
+    lastValidFrame.minTemp = 20.0f;
+    lastValidFrame.maxTemp = 30.0f;
+
     uint32_t lastFpsCalc = millis();
     uint32_t frameCount = 0;
     float currentFps = 0.0f;
@@ -512,6 +543,17 @@ void displayTask(void *pvParameters) {
             uiDismissSensorError();
         }
 
+        // Check single-click timeout (350 ms) for snapshot triggering in live view
+        if (pendingWheelSingleClick && (millis() - lastWheelClickTime > 350)) {
+            pendingWheelSingleClick = false;
+            if (!uiIsFullscreen() && getAppState() == APP_STATE_THERMAL_VIEW) {
+                uiFreezeThermal();
+                if (displayTaskHandle != NULL) {
+                    xTaskNotifyGive(displayTaskHandle);
+                }
+            }
+        }
+
         // 3. Thermal Frame Acquisition and Upscaling (when in live thermal view or PPT modes)
         bool frameProcessed = false;
         AppState curState = getAppState();
@@ -522,13 +564,49 @@ void displayTask(void *pvParameters) {
         bool inPPTMode = (curState == APP_STATE_PPT_ARMED || 
                           curState == APP_STATE_PPT_ACQUIRING || 
                           curState == APP_STATE_PPT_INSPECT);
-        int activeVpW = inPPTMode ? 144 : vpW;
-        int activeVpH = inPPTMode ? 192 : vpH;
+        bool isFS = uiIsFullscreen();
 
-        static bool lastInPPT = false;
-        if (inPPTMode != lastInPPT) {
-            scaler.reconfigureViewport(activeVpW, activeVpH, gridW, gridH);
-            lastInPPT = inPPTMode;
+        int activeVpW = inPPTMode ? 144 : (isFS ? DISPLAY_WIDTH : vpW);
+        int activeVpH = inPPTMode ? 192 : (isFS ? DISPLAY_HEIGHT : vpH);
+        int activeGridW = isFS ? SENSOR_WIDTH : (inPPTMode ? 24 : gridW);
+        int activeGridH = isFS ? SENSOR_HEIGHT : (inPPTMode ? 32 : gridH);
+        int activeRot = isFS ? 0 : 3;
+
+        static int lastVpW = 0, lastVpH = 0, lastGridW = 0, lastGridH = 0;
+        if (activeVpW != lastVpW || activeVpH != lastVpH || activeGridW != lastGridW || activeGridH != lastGridH) {
+            scaler.reconfigureViewport(activeVpW, activeVpH, activeGridW, activeGridH);
+            lastVpW = activeVpW;
+            lastVpH = activeVpH;
+            lastGridW = activeGridW;
+            lastGridH = activeGridH;
+        }
+
+        static AppState lastThermalState = APP_STATE_BOOT;
+        if (curState != APP_STATE_THERMAL_FREEZE) {
+            if (lastThermalState == APP_STATE_THERMAL_FREEZE && curState == APP_STATE_THERMAL_VIEW && lv_scr_act() == screen_thermal) {
+                // Immediately refresh HUD back to live hints on unfreeze
+                float range = smoothedMax - smoothedMin;
+                float effectiveMin = smoothedMin;
+                if (range < THERMAL_MIN_RANGE_SPAN) {
+                    float mid = 0.5f * (smoothedMin + smoothedMax);
+                    range = THERMAL_MIN_RANGE_SPAN;
+                    effectiveMin = mid - 0.5f * range;
+                }
+                updateThermalHUD(
+                    lastValidFrame.centerTemp,
+                    effectiveMin,
+                    effectiveMin + range,
+                    currentFps,
+                    currentScalingMode,
+                    currentTempUnit,
+                    activePalette,
+                    isFS ? 0 : vpX,
+                    0,
+                    activeVpW,
+                    activeVpH
+                );
+            }
+            lastThermalState = curState;
         }
 
         bool isThermalOrPPTScr = (lv_scr_act() == screen_thermal || lv_scr_act() == screen_ppt);
@@ -538,13 +616,14 @@ void displayTask(void *pvParameters) {
             if (notified > 0) {
                 if (getLatestThermalFrame(currentFrame)) {
                     frameProcessed = true;
+                    lastValidFrame = currentFrame;
                     static int64_t lastFrameStartUs = 0;
                     int64_t frameStartUs = esp_timer_get_time();
                     int64_t frameIntervalUs = (lastFrameStartUs > 0) ? (frameStartUs - lastFrameStartUs) : 66666;
                     lastFrameStartUs = frameStartUs;
 
-                    // Rotate raw frame
-                    rotateSensorFrame(currentFrame.temperatures, rotatedGrid, currentCameraRotation, currentMirrorFeed);
+                    // Rotate raw frame (0 for fullscreen landscape, 3 for portrait)
+                    rotateSensorFrame(currentFrame.temperatures, rotatedGrid, activeRot, currentMirrorFeed);
 
                     // Dynamic scene auto-ranging:
                     // Track robust percentiles (2nd & 98th) smoothly to eliminate single-pixel spikes while staying responsive
@@ -575,8 +654,8 @@ void displayTask(void *pvParameters) {
                     scaler.render(
                         currentScalingMode,
                         rotatedGrid,
-                        gridW,
-                        gridH,
+                        activeGridW,
+                        activeGridH,
                         thermalFrameBuffer,
                         0,
                         0,
@@ -613,14 +692,24 @@ void displayTask(void *pvParameters) {
                             currentScalingMode,
                             currentTempUnit,
                             activePalette,
-                            vpX, vpY, vpW, vpH
+                            isFS ? 0 : vpX,
+                            0,
+                            activeVpW,
+                            activeVpH
                         );
                     } else if (curState == APP_STATE_PPT_ARMED) {
                         if (isPPTAcquiring()) {
                             setAppState(APP_STATE_PPT_ACQUIRING);
                             updatePPTScreenAcquiring(pptGetAcquiredFrames(), PPT_NUM_FRAMES);
                         } else {
-                            updatePPTScreenArmed(pptGetCurrentDt(), PPT_TRIGGER_THRESH_C);
+                            updatePPTScreenArmed(
+                                pptGetCurrentDt(), 
+                                PPT_TRIGGER_THRESH_C,
+                                effectiveMin,
+                                effectiveMin + range,
+                                currentTempUnit,
+                                activePalette
+                            );
                         }
                     } else if (curState == APP_STATE_PPT_ACQUIRING) {
                         if (isPPTInspect()) {
@@ -644,6 +733,57 @@ void displayTask(void *pvParameters) {
                     logFrameProfile(scaleUs, flushUs, frameTotalUs, frameIntervalUs);
                 }
             }
+        } else if (curState == APP_STATE_THERMAL_FREEZE && lv_scr_act() == screen_thermal) {
+            if (lastThermalState != APP_STATE_THERMAL_FREEZE) {
+                lastThermalState = APP_STATE_THERMAL_FREEZE;
+
+                // De-noise and freeze the snapshot frame with edge-preserving 3x3 filter
+                static float snapshotRaw[SENSOR_PIXELS];
+                filterSnapshotFrame(lastValidFrame.temperatures, snapshotRaw);
+                rotateSensorFrame(snapshotRaw, rotatedGrid, activeRot, currentMirrorFeed);
+
+                float range = smoothedMax - smoothedMin;
+                float effectiveMin = smoothedMin;
+                if (range < THERMAL_MIN_RANGE_SPAN) {
+                    float mid = 0.5f * (smoothedMin + smoothedMax);
+                    range = THERMAL_MIN_RANGE_SPAN;
+                    effectiveMin = mid - 0.5f * range;
+                }
+                float invRange = 255.0f / range;
+
+                scaler.render(
+                    currentScalingMode,
+                    rotatedGrid,
+                    activeGridW,
+                    activeGridH,
+                    thermalFrameBuffer,
+                    0,
+                    0,
+                    activeVpW,
+                    activeVpH,
+                    activeVpW,
+                    effectiveMin,
+                    invRange,
+                    activePalette
+                );
+
+                updateThermalHUD(
+                    lastValidFrame.centerTemp,
+                    effectiveMin,
+                    effectiveMin + range,
+                    0.0f,
+                    currentScalingMode,
+                    currentTempUnit,
+                    activePalette,
+                    isFS ? 0 : vpX,
+                    0,
+                    activeVpW,
+                    activeVpH
+                );
+
+                lv_timer_handler();
+                frameProcessed = true;
+            }
         } else if (curState == APP_STATE_PPT_INSPECT && lv_scr_act() == screen_ppt) {
             // PPT Phase Inspection: render frequency depth slice
             static int lastRenderedBin = -1;
@@ -656,7 +796,6 @@ void displayTask(void *pvParameters) {
             int currentBin = pptGetBin();
             bool needRerender = (currentBin != lastRenderedBin || 
                                  currentScalingMode != lastRenderedScalingMode ||
-                                 currentCameraRotation != lastRenderedRotation ||
                                  currentMirrorFeed != lastRenderedMirror ||
                                  activePalette != lastRenderedPal ||
                                  curState != lastState);
@@ -668,28 +807,30 @@ void displayTask(void *pvParameters) {
                 lastState = curState;
                 lastRenderedBin = currentBin;
                 lastRenderedScalingMode = currentScalingMode;
-                lastRenderedRotation = currentCameraRotation;
                 lastRenderedMirror = currentMirrorFeed;
                 lastRenderedPal = activePalette;
 
                 // Fetch normalized phase array (0.0f - 255.0f)
                 const float* normPhase = pptGetNormalizedPhaseGrid();
 
-                // Rotate raw 32x24 phase grid to match camera orientation
-                rotateSensorFrame(normPhase, rotatedGrid, currentCameraRotation, currentMirrorFeed);
+                // Rotate raw 32x24 phase grid to match portrait camera orientation
+                rotateSensorFrame(normPhase, rotatedGrid, 3, currentMirrorFeed);
 
-                // Upscale directly into thermalFrameBuffer using active scaler mode
+                // Upscale directly into thermalFrameBuffer.
+                // For PPT phase maps (static 2D slice, values 0.0-255.0), bypass temporal history (TAAU) 
+                // to prevent temporal clamping saturation (whiteout) and history buffer contamination.
+                ScalingMode pptRenderMode = (currentScalingMode == SCALING_TAAU) ? SCALING_BICUBIC : currentScalingMode;
                 scaler.render(
-                    currentScalingMode,
+                    pptRenderMode,
                     rotatedGrid,
-                    gridW,
-                    gridH,
+                    24,
+                    32,
                     thermalFrameBuffer,
                     0,
                     0,
-                    activeVpW,
-                    activeVpH,
-                    activeVpW,
+                    144,
+                    192,
+                    144,
                     0.0f,
                     1.0f,
                     activePalette

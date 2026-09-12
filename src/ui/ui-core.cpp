@@ -1,18 +1,20 @@
 #include "ui.hpp"
 #include "display.hpp"
+#include "sensor.hpp"
 #include "power.hpp"
 #include "ppt.hpp"
+#include "storage.hpp"
 
 // Active application state
 static AppState currentAppState = APP_STATE_BOOT;
 
 // Runtime setting variables
-static int currentRotationSetting = CAMERA_ROTATION;
 static TempUnit currentTempUnitSetting = TEMP_UNIT_CELSIUS;
 static PaletteType currentPaletteSetting = PALETTE_IRONBOW;
 static bool currentMirrorSetting = MIRROR_HORIZONTAL;
 static ScalingMode currentScalingSetting = SCALING_BICUBIC;
 static uint8_t currentBrightnessSetting = TFT_DEFAULT_BRIGHTNESS;
+static uint32_t currentI2CSpeedSetting = I2C_FREQ_RUN;
 
 // Screen pointers
 lv_obj_t* screen_boot = nullptr;
@@ -99,14 +101,14 @@ static void buildStyles() {
     lv_style_set_border_color(&style_btn_pressed, UI_COLOR_ACCENT);
     lv_style_set_border_width(&style_btn_pressed, 2);
 
-    // Back Button Focused Style (Filled with dark grey, red border, accent text)
+    // Back Button Focused Style (Filled with red, red border, black text)
     lv_style_init(&style_btn_back_focused);
-    lv_style_set_bg_color(&style_btn_back_focused, UI_COLOR_FOCUS_GREY);
+    lv_style_set_bg_color(&style_btn_back_focused, UI_COLOR_ACCENT);
     lv_style_set_bg_opa(&style_btn_back_focused, LV_OPA_COVER);
     lv_style_set_border_color(&style_btn_back_focused, UI_COLOR_ACCENT);
     lv_style_set_border_width(&style_btn_back_focused, 2);
     lv_style_set_outline_width(&style_btn_back_focused, 0);
-    lv_style_set_text_color(&style_btn_back_focused, UI_COLOR_ACCENT);
+    lv_style_set_text_color(&style_btn_back_focused, lv_color_black());
     lv_style_set_transition(&style_btn_back_focused, &trans_focus);
 }
 
@@ -157,19 +159,52 @@ void setAppState(AppState newState) {
 }
 
 // Settings Accessors and Mutators
-int getCameraRotationSetting() { return currentRotationSetting; }
 TempUnit getTempUnitSetting() { return currentTempUnitSetting; }
 PaletteType getPaletteSetting() { return currentPaletteSetting; }
 bool getMirrorSetting() { return currentMirrorSetting; }
 ScalingMode getScalingModeSetting() { return currentScalingSetting; }
 uint8_t getDisplayBrightnessSetting() { return currentBrightnessSetting; }
 
-void setCameraRotationSetting(int rot) { currentRotationSetting = rot; }
-void setTempUnitSetting(TempUnit unit) { currentTempUnitSetting = unit; }
-void setPaletteSetting(PaletteType pal) { currentPaletteSetting = pal; }
-void setMirrorSetting(bool mirror) { currentMirrorSetting = mirror; }
-void setScalingModeSetting(ScalingMode mode) { currentScalingSetting = mode; }
-void setDisplayBrightnessSetting(uint8_t percent) { currentBrightnessSetting = percent; }
+void setTempUnitSetting(TempUnit unit) {
+    if (currentTempUnitSetting != unit) {
+        currentTempUnitSetting = unit;
+        markSettingsDirty();
+    }
+}
+void setPaletteSetting(PaletteType pal) {
+    if (currentPaletteSetting != pal) {
+        currentPaletteSetting = pal;
+        markSettingsDirty();
+    }
+}
+void setMirrorSetting(bool mirror) {
+    if (currentMirrorSetting != mirror) {
+        currentMirrorSetting = mirror;
+        markSettingsDirty();
+    }
+}
+void setScalingModeSetting(ScalingMode mode) {
+    if (currentScalingSetting != mode) {
+        currentScalingSetting = mode;
+        markSettingsDirty();
+    }
+}
+void setDisplayBrightnessSetting(uint8_t percent) {
+    if (currentBrightnessSetting != percent) {
+        currentBrightnessSetting = percent;
+        markSettingsDirty();
+    }
+}
+uint32_t getI2CSpeedSetting() {
+    return currentI2CSpeedSetting;
+}
+void setI2CSpeedSetting(uint32_t speedHz) {
+    if (currentI2CSpeedSetting != speedHz) {
+        currentI2CSpeedSetting = speedHz;
+        setSensorI2CSpeed(speedHz);
+        markSettingsDirty();
+    }
+}
 
 // Temperature conversion helpers
 float convertTemp(float tempC, TempUnit unit) {
@@ -199,6 +234,9 @@ const char* getUnitFullName(TempUnit unit) {
 void uiNavToThermal() {
     currentAppState = APP_STATE_THERMAL_VIEW;
     pptDisarm();
+    resetScalerHistory();
+    // Restore user-configured live streaming I2C speed (e.g. 800 kHz / 32 Hz)
+    setSensorI2CSpeed(currentI2CSpeedSetting);
     lv_group_remove_all_objs(ui_wheel_group);
     WheelEventType dummy;
     while (getWheelEvent(dummy, 0)) { }
@@ -206,6 +244,26 @@ void uiNavToThermal() {
     // Quick crossfade (100 ms) between thermal feed and main menu
     lv_scr_load_anim(screen_thermal, LV_SCR_LOAD_ANIM_FADE_ON, 100, 0, false);
     Serial.println("[UI] Transitioned to Live Thermal View (100ms Crossfade)");
+}
+
+void uiFreezeThermal() {
+    currentAppState = APP_STATE_THERMAL_FREEZE;
+    WheelEventType dummy;
+    while (getWheelEvent(dummy, 0)) { }
+    uiTriggerSnapshotFlash();
+    Serial.println("[UI] Thermal feed FROZEN (Snapshot captured)");
+}
+
+void uiUnfreezeThermal() {
+    currentAppState = APP_STATE_THERMAL_VIEW;
+    resetScalerHistory();
+    WheelEventType dummy;
+    while (getWheelEvent(dummy, 0)) { }
+    Serial.println("[UI] Thermal feed RESUMED (Live view)");
+}
+
+bool isThermalFrozen() {
+    return (currentAppState == APP_STATE_THERMAL_FREEZE);
 }
 
 static uint32_t pptArmedCooldownUntil = 0;
@@ -217,6 +275,9 @@ bool isPPTArmedCooldown() {
 void uiNavToPPT() {
     currentAppState = APP_STATE_PPT_ARMED;
     pptArm();
+    resetScalerHistory();
+    // Engage 400 kHz (16 Hz sensor rate) for maximum PPT signal integrity and zero bit flips
+    setSensorI2CSpeed(I2C_SPEED_400K);
     pptArmedCooldownUntil = millis() + 400; // 400ms cooldown ignores button click bounce/bleed-through
     lv_group_remove_all_objs(ui_wheel_group);
     WheelEventType dummy;
@@ -229,7 +290,21 @@ void uiNavToPPT() {
 void uiNavToMainMenu() {
     AppState prevState = currentAppState;
     currentAppState = APP_STATE_MAIN_MENU;
+
+    if (uiIsFullscreen()) {
+        uiExitFullscreen();
+    }
+
+    // Persist settings if exiting Settings or its dedicated sub-pages
+    if (prevState == APP_STATE_SETTINGS || prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS) {
+        saveSettingsIfDirty();
+    }
+
     pptDisarm();
+    // Restore user-configured live streaming I2C speed if exiting PPT
+    if (prevState == APP_STATE_PPT_ARMED || prevState == APP_STATE_PPT_ACQUIRING || prevState == APP_STATE_PPT_INSPECT) {
+        setSensorI2CSpeed(currentI2CSpeedSetting);
+    }
     lv_group_remove_all_objs(ui_wheel_group);
 
     for (int i = 0; i < MAIN_MENU_COUNT; ++i) {
@@ -247,7 +322,7 @@ void uiNavToMainMenu() {
     WheelEventType dummy;
     while (getWheelEvent(dummy, 0)) { }
 
-    if (prevState == APP_STATE_SETTINGS || prevState == APP_STATE_SCALING_MENU) {
+    if (prevState == APP_STATE_SETTINGS || prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS) {
         // Between menu screens: fast slide transition (100ms)
         lv_scr_load_anim(screen_main_menu, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 100, 0, false);
     } else {

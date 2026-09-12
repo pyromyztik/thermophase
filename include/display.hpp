@@ -19,12 +19,12 @@ void showBootScreen(const char* statusText, uint8_t progressPercent);
 void displayTask(void *pvParameters);
 
 // Runtime display and sensor setting updates
-void updateCameraRotation(int rotation);
 void updateTempUnit(TempUnit unit);
 void updatePalette(PaletteType palette);
 void updateMirror(bool mirror);
 void updateScalingMode(ScalingMode mode);
 ScalingMode getScalingMode();
+void resetScalerHistory();
 void setDisplayBrightness(uint8_t percent);
 uint8_t getDisplayBrightness();
 
