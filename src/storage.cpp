@@ -29,6 +29,7 @@ void loadSettings() {
     bool mirror    = prefs.getBool("mirror", MIRROR_HORIZONTAL);
     uint8_t scale  = prefs.getUChar("scaling", (uint8_t)SCALING_BICUBIC);
     uint32_t i2cSpd = prefs.getUInt("i2c_speed", I2C_SPEED_800K);
+    bool rgbEnabled = prefs.getBool("rgb_led", true);
     prefs.end();
 
     // Clamp & sanitize values against potential flash corruption
@@ -45,6 +46,7 @@ void loadSettings() {
     setMirrorSetting(mirror);
     setScalingModeSetting((ScalingMode)scale);
     setI2CSpeedSetting(i2cSpd);
+    setRgbLedEnabledSetting(rgbEnabled);
 
     // Apply to Display engine
     setDisplayBrightness(bright);
@@ -57,8 +59,8 @@ void loadSettings() {
     setSensorI2CSpeed(i2cSpd);
 
     settingsDirty = false;
-    Serial.printf("[STORAGE] Loaded settings from NVS -> Brightness: %d%%, Unit: %d, Palette: %d, Mirror: %d, Scaling: %d, I2C: %lu Hz\n",
-                  bright, unit, pal, mirror ? 1 : 0, scale, i2cSpd);
+    Serial.printf("[STORAGE] Loaded settings from NVS -> Brightness: %d%%, Unit: %d, Palette: %d, Mirror: %d, Scaling: %d, I2C: %lu Hz, RGB: %s\n",
+                  bright, unit, pal, mirror ? 1 : 0, scale, i2cSpd, rgbEnabled ? "ON" : "OFF");
 }
 
 void saveSettingsIfDirty() {
@@ -78,6 +80,7 @@ void saveSettingsIfDirty() {
     prefs.putBool("mirror", getMirrorSetting());
     prefs.putUChar("scaling", (uint8_t)getScalingModeSetting());
     prefs.putUInt("i2c_speed", getI2CSpeedSetting());
+    prefs.putBool("rgb_led", getRgbLedEnabledSetting());
     prefs.end();
 
     settingsDirty = false;

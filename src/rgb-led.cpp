@@ -12,6 +12,7 @@ void initRGB() {
 #include "sensor.hpp"
 #include "ui.hpp"
 #include "ppt.hpp"
+#include "display.hpp"
 
 void ledAnimationTask(void *pvParameters) {
     uint32_t hue = 0;
@@ -49,6 +50,14 @@ void ledAnimationTask(void *pvParameters) {
             vTaskDelay(pdMS_TO_TICKS(300));
         } else {
             // ALL SYSTEMS NORMAL: Contextual mode feedback
+            if (!getRgbLedEnabledSetting()) {
+                onboardLED.clear();
+                onboardLED.setPixelColor(0, 0);
+                onboardLED.show();
+                vTaskDelay(pdMS_TO_TICKS(50));
+                continue;
+            }
+
             AppState state = getAppState();
             if (state == APP_STATE_PPT_ARMED) {
                 // PPT ARMED: Pulsing Amber / Golden Yellow
@@ -73,8 +82,55 @@ void ledAnimationTask(void *pvParameters) {
                 onboardLED.setPixelColor(0, color);
                 onboardLED.show();
                 vTaskDelay(pdMS_TO_TICKS(40));
+            } else if (state == APP_STATE_THERMAL_VIEW || state == APP_STATE_THERMAL_FREEZE) {
+                // LIVE THERMAL VIEW: Smoothly interpolate RGB LED to match the center reticle color
+                float range = displayMaxTemp - displayMinTemp;
+                if (range < THERMAL_MIN_RANGE_SPAN) {
+                    range = THERMAL_MIN_RANGE_SPAN;
+                }
+                float norm = (displayCenterTemp - displayMinTemp) / range;
+                if (norm < 0.0f) norm = 0.0f;
+                if (norm > 1.0f) norm = 1.0f;
+                int palIdx = (int)(norm * 255.0f);
+                if (palIdx > 255) palIdx = 255;
+                if (palIdx < 0) palIdx = 0;
+
+                const uint16_t* pal = getActivePalette();
+                if (pal != nullptr) {
+                    uint16_t rgb565 = pal[palIdx];
+                    // Unpack target RGB565 to 8-bit RGB components
+                    float targetR = (float)(((rgb565 >> 11) & 0x1F) * 255 / 31);
+                    float targetG = (float)(((rgb565 >> 5) & 0x3F) * 255 / 63);
+                    float targetB = (float)((rgb565 & 0x1F) * 255 / 31);
+
+                    static float smoothR = 0.0f;
+                    static float smoothG = 0.0f;
+                    static float smoothB = 0.0f;
+                    static bool smoothInited = false;
+
+                    if (!smoothInited) {
+                        smoothR = targetR;
+                        smoothG = targetG;
+                        smoothB = targetB;
+                        smoothInited = true;
+                    } else {
+                        // Smooth exponential low-pass filter (alpha = 0.08 at 50Hz update rate)
+                        // Filters out MLX90640 sensor noise and provides fluid liquid-like color morphing
+                        const float alpha = 0.08f;
+                        smoothR += (targetR - smoothR) * alpha;
+                        smoothG += (targetG - smoothG) * alpha;
+                        smoothB += (targetB - smoothB) * alpha;
+                    }
+
+                    uint8_t r = (uint8_t)(smoothR + 0.5f);
+                    uint8_t g = (uint8_t)(smoothG + 0.5f);
+                    uint8_t b = (uint8_t)(smoothB + 0.5f);
+                    onboardLED.setPixelColor(0, onboardLED.Color(r, g, b));
+                    onboardLED.show();
+                }
+                vTaskDelay(pdMS_TO_TICKS(20));
             } else {
-                // LIVE VIEW & MENUS: Smooth rainbow cycle
+                // MENUS & BOOT: Smooth rainbow cycle rotation
                 uint32_t color = onboardLED.gamma32(onboardLED.ColorHSV(hue));
                 onboardLED.setPixelColor(0, color);
                 onboardLED.show();

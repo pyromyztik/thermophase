@@ -81,6 +81,9 @@ void buildMainMenuScreen() {
     lv_line_set_points(line_top, h_line_pts, 2);
     lv_obj_add_style(line_top, &style_divider, 0);
 
+    // Top-right Battery Indicator (Percentage to the left of the icon)
+    createBatteryIndicator(screen_main_menu, true, LV_ALIGN_TOP_RIGHT, -14, 11);
+
     // Menu Buttons Container (4 items spaced vertically)
     int itemY[4] = {40, 82, 124, 166};
     for (int i = 0; i < MAIN_MENU_COUNT; ++i) {

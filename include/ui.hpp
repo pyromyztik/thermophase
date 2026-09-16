@@ -82,7 +82,7 @@ extern lv_obj_t* screen_error;
 
 // Screen item counts
 constexpr int MAIN_MENU_COUNT = 4;
-constexpr int SETTINGS_COUNT = 7;
+constexpr int SETTINGS_COUNT = 8;
 constexpr int SCALING_OPTIONS_COUNT = 6;
 
 // Shared Screen Widgets
@@ -170,6 +170,10 @@ void updateScalingDesc(int idx);
 void updateSensorErrorAttempt(uint32_t attemptCount);
 void resetSensorErrorAttempt();
 
+// Battery UI Indicator Management
+void createBatteryIndicator(lv_obj_t* parent, bool showPercentage = true, lv_align_t align = LV_ALIGN_TOP_RIGHT, lv_coord_t x_ofs = -14, lv_coord_t y_ofs = 9);
+void updateBatteryUI(bool force = false);
+
 // Fullscreen Thermal View Controls
 void uiEnterFullscreen();
 void uiExitFullscreen();
@@ -185,6 +189,7 @@ bool getMirrorSetting();
 ScalingMode getScalingModeSetting();
 uint8_t getDisplayBrightnessSetting();
 uint32_t getI2CSpeedSetting();
+bool getRgbLedEnabledSetting();
 
 void setTempUnitSetting(TempUnit unit);
 void setPaletteSetting(PaletteType pal);
@@ -192,6 +197,7 @@ void setMirrorSetting(bool mirror);
 void setScalingModeSetting(ScalingMode mode);
 void setDisplayBrightnessSetting(uint8_t percent);
 void setI2CSpeedSetting(uint32_t speedHz);
+void setRgbLedEnabledSetting(bool enabled);
 
 // Shared Temperature Conversion Helpers
 float convertTemp(float tempC, TempUnit unit);

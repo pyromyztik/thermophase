@@ -274,6 +274,12 @@ void buildThermalScreen() {
     lv_obj_set_style_text_font(label_max_temp, &lv_font_montserrat_12, 0);
     lv_obj_align(label_max_temp, LV_ALIGN_TOP_LEFT, 2, 158);
 
+    label_fps = lv_label_create(hud_left_panel);
+    lv_label_set_text(label_fps, "0.0 FPS");
+    lv_obj_set_style_text_color(label_fps, UI_COLOR_GREEN, 0);
+    lv_obj_set_style_text_font(label_fps, &lv_font_montserrat_10, 0);
+    lv_obj_align(label_fps, LV_ALIGN_BOTTOM_LEFT, 2, -22);
+
     // Left Control hint in bottom-left black bar
     label_hint_left = lv_label_create(hud_left_panel);
     lv_label_set_text(label_hint_left, "[Click] Snap");
@@ -281,7 +287,7 @@ void buildThermalScreen() {
     lv_obj_set_style_text_font(label_hint_left, &lv_font_montserrat_8, 0);
     lv_obj_align(label_hint_left, LV_ALIGN_BOTTOM_LEFT, 2, -6);
 
-    // 4. Side HUD Panel: RIGHT (FPS, Scaler Mode & Color Bar)
+    // 4. Side HUD Panel: RIGHT (Battery, Scaler Mode & Color Bar)
     hud_right_panel = lv_obj_create(screen_thermal);
     lv_obj_set_pos(hud_right_panel, 250, 0);
     lv_obj_set_size(hud_right_panel, 70, 240);
@@ -294,17 +300,14 @@ void buildThermalScreen() {
     lv_obj_set_style_pad_all(hud_right_panel, 4, 0);
     lv_obj_clear_flag(hud_right_panel, LV_OBJ_FLAG_SCROLLABLE);
 
-    label_fps = lv_label_create(hud_right_panel);
-    lv_label_set_text(label_fps, "0.0 FPS");
-    lv_obj_set_style_text_color(label_fps, UI_COLOR_GREEN, 0);
-    lv_obj_set_style_text_font(label_fps, &lv_font_montserrat_10, 0);
-    lv_obj_align(label_fps, LV_ALIGN_TOP_LEFT, 4, 6);
+    // Top-right Battery Indicator (Aligned vertically with "THERMAL" header on left panel)
+    createBatteryIndicator(hud_right_panel, true, LV_ALIGN_TOP_RIGHT, -2, 1);
 
     label_scaling_mode = lv_label_create(hud_right_panel);
     lv_label_set_text(label_scaling_mode, "BICUB");
     lv_obj_set_style_text_color(label_scaling_mode, UI_COLOR_TEXT_DIM, 0);
     lv_obj_set_style_text_font(label_scaling_mode, &lv_font_montserrat_10, 0);
-    lv_obj_align(label_scaling_mode, LV_ALIGN_TOP_LEFT, 4, 20);
+    lv_obj_align(label_scaling_mode, LV_ALIGN_TOP_LEFT, 4, 18);
 
     // Vertical Color Bar Canvas (16x160)
     canvas_colorbar = lv_canvas_create(hud_right_panel);

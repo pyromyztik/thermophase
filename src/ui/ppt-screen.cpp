@@ -300,6 +300,9 @@ void buildPPTScreen() {
     lv_obj_set_style_radius(ppt_right_panel, 0, 0);
     lv_obj_clear_flag(ppt_right_panel, LV_OBJ_FLAG_SCROLLABLE);
 
+    // Top-right Battery Indicator (Icon only - no percentage on PPT screen)
+    createBatteryIndicator(ppt_right_panel, false, LV_ALIGN_TOP_RIGHT, -6, 6);
+
     ppt_lbl_depth_hdr = lv_label_create(ppt_right_panel);
     lv_label_set_text(ppt_lbl_depth_hdr, "STATUS");
     lv_obj_set_style_text_color(ppt_lbl_depth_hdr, UI_COLOR_GREEN, 0);

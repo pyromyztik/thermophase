@@ -14,14 +14,16 @@ static const int8_t QEM[16] = {
     0,  1, -1,  0
 };
 
-static void postEvent(WheelEventType evt) {
+bool postWheelEvent(WheelEventType evt) {
+    bool ok = false;
     if (wheelQueue != NULL) {
-        xQueueSend(wheelQueue, &evt, 0);
+        ok = (xQueueSend(wheelQueue, &evt, 0) == pdTRUE);
     }
     // Instantly wake up the display/UI task if waiting
     if (displayTaskHandle != NULL) {
         xTaskNotifyGive(displayTaskHandle);
     }
+    return ok;
 }
 
 bool initWheel() {
@@ -78,9 +80,9 @@ void wheelTask(void *pvParameters) {
             // HW-040 encoders have physical detents at both state 3 (1,1) and state 0 (0,0) (2 transitions per detent click)
             if (currState == 0x03 || currState == 0x00) {
                 if (rotAccum >= 1) {
-                    postEvent(WHEEL_EVENT_ROT_CW);
+                    postWheelEvent(WHEEL_EVENT_ROT_CW);
                 } else if (rotAccum <= -1) {
-                    postEvent(WHEEL_EVENT_ROT_CCW);
+                    postWheelEvent(WHEEL_EVENT_ROT_CCW);
                 }
                 rotAccum = 0;
             }
@@ -103,13 +105,13 @@ void wheelTask(void *pvParameters) {
             // Trigger long-press immediately once duration reaches 600ms
             if (btnIsPressed && !longPressTriggered && (now - btnPressTime >= 600)) {
                 longPressTriggered = true;
-                postEvent(WHEEL_EVENT_LONG_PRESS);
+                postWheelEvent(WHEEL_EVENT_LONG_PRESS);
             }
         } else if (rawBtn == HIGH && lastRawBtn == LOW) {
             // Released
             if (btnIsPressed && !longPressTriggered) {
                 // Valid debounced short click event on button release
-                postEvent(WHEEL_EVENT_CLICK);
+                postWheelEvent(WHEEL_EVENT_CLICK);
             }
             btnIsPressed = false;
             longPressTriggered = false;

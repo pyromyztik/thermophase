@@ -204,6 +204,9 @@ void buildBrightnessScreen() {
     lv_line_set_points(line_top, h_line_pts, 2);
     lv_obj_add_style(line_top, &style_divider, 0);
 
+    // Top-right Battery Indicator (Percentage to the left of the icon)
+    createBatteryIndicator(screen_brightness, true, LV_ALIGN_TOP_RIGHT, -14, 11);
+
     // Vertical Divider Line separating options from right-hand contextual hints
     static lv_point_t v_line_pts[] = {{216, 32}, {216, 216}};
     lv_obj_t* line_vert = lv_line_create(screen_brightness);

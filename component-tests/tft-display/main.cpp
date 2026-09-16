@@ -13,7 +13,7 @@
 #define TFT_MOSI  41  // SPI MOSI (SDI on display)
 #define TFT_SCK   40  // SPI Clock (SCK on display)
 #define TFT_MISO  39  // SPI MISO (SDO on display, required for readcommand8 diagnostics)
-#define TFT_LED   21  // Backlight (Recommended: connect display LED directly to 3.3V!)
+#define TFT_LED   47  // Backlight (Recommended: connect display LED directly to 3.3V!)
 
 // Option A: Hardware SPI (Fast)
 Adafruit_ILI9341 tft = Adafruit_ILI9341(&SPI, TFT_DC, TFT_CS, TFT_RST);

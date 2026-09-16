@@ -6,8 +6,8 @@ constexpr uint8_t FRAME_HEIGHT = 24;
 constexpr size_t  FRAME_SIZE = FRAME_WIDTH * FRAME_HEIGHT;
 
 // ESP32-S3 hardware I2C pins
-constexpr int PIN_SDA = 8;
-constexpr int PIN_SCL = 9;
+constexpr int PIN_SDA = 16;
+constexpr int PIN_SCL = 17;
 
 Adafruit_MLX90640 mlx;
 float frame[FRAME_SIZE];

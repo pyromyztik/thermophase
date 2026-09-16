@@ -59,21 +59,23 @@ static lv_indev_drv_t indev_drv;
 
 // Rotate the raw 32x24 sensor array to the specified orientation and mirror mode:
 // rotation 3 = portrait (24x32), rotation 0 = fullscreen landscape (32x24)
-static void rotateSensorFrame(const float* src, float* dst, int rotation, bool mirror) {
+static void rotateSensorFrame(const float* src, float* dst, int rotation, bool mirrorH, bool mirrorV) {
     if (rotation == 0) {
         for (int r = 0; r < 24; ++r) {
+            int screen_r = mirrorV ? (23 - r) : r;
             for (int c = 0; c < 32; ++c) {
-                int screen_c = mirror ? (31 - c) : c;
-                dst[r * 32 + c] = src[r * 32 + screen_c];
+                int screen_c = mirrorH ? (31 - c) : c;
+                dst[r * 32 + c] = src[screen_r * 32 + screen_c];
             }
         }
     } else {
         // rotation == 3 (default portrait)
         for (int r = 0; r < 32; ++r) {
+            int screen_r = mirrorV ? (31 - r) : r;
             for (int c = 0; c < 24; ++c) {
-                int screen_c = mirror ? (23 - c) : c;
+                int screen_c = mirrorH ? (23 - c) : c;
                 int orig_r = screen_c;
-                int orig_c = 31 - r;
+                int orig_c = 31 - screen_r;
                 dst[r * 24 + c] = src[orig_r * 32 + orig_c];
             }
         }
@@ -396,7 +398,7 @@ bool initDisplay() {
     SPI.begin(TFT_SCK, TFT_MISO, TFT_MOSI, -1);
 
     tft.begin(TFT_SPI_FREQ);
-    tft.setRotation(DISPLAY_ROTATION);
+    tft.setRotation(TFT_ROTATION);
     tft.fillScreen(ILI9341_BLACK);
 
 #if CHECK_TFT_MISO
@@ -518,7 +520,7 @@ void displayTask(void *pvParameters) {
                 if (globalDeviceStatus == STATUS_DISPLAY_ERROR) {
                     Serial.println("[TFT] SUCCESS: Display reconnected!");
                     tft.begin(TFT_SPI_FREQ);
-                    tft.setRotation(DISPLAY_ROTATION);
+                    tft.setRotation(TFT_ROTATION);
                     lv_obj_invalidate(lv_scr_act());
                 }
                 displayFailCount = 0;
@@ -623,7 +625,7 @@ void displayTask(void *pvParameters) {
                     lastFrameStartUs = frameStartUs;
 
                     // Rotate raw frame (0 for fullscreen landscape, 3 for portrait)
-                    rotateSensorFrame(currentFrame.temperatures, rotatedGrid, activeRot, currentMirrorFeed);
+                    rotateSensorFrame(currentFrame.temperatures, rotatedGrid, activeRot, currentMirrorFeed, MIRROR_VERTICAL);
 
                     // Dynamic scene auto-ranging:
                     // Track robust percentiles (2nd & 98th) smoothly to eliminate single-pixel spikes while staying responsive
@@ -740,7 +742,7 @@ void displayTask(void *pvParameters) {
                 // De-noise and freeze the snapshot frame with edge-preserving 3x3 filter
                 static float snapshotRaw[SENSOR_PIXELS];
                 filterSnapshotFrame(lastValidFrame.temperatures, snapshotRaw);
-                rotateSensorFrame(snapshotRaw, rotatedGrid, activeRot, currentMirrorFeed);
+                rotateSensorFrame(snapshotRaw, rotatedGrid, activeRot, currentMirrorFeed, MIRROR_VERTICAL);
 
                 float range = smoothedMax - smoothedMin;
                 float effectiveMin = smoothedMin;
@@ -814,7 +816,7 @@ void displayTask(void *pvParameters) {
                 const float* normPhase = pptGetNormalizedPhaseGrid();
 
                 // Rotate raw 32x24 phase grid to match portrait camera orientation
-                rotateSensorFrame(normPhase, rotatedGrid, 3, currentMirrorFeed);
+                rotateSensorFrame(normPhase, rotatedGrid, 3, currentMirrorFeed, MIRROR_VERTICAL);
 
                 // Upscale directly into thermalFrameBuffer.
                 // For PPT phase maps (static 2D slice, values 0.0-255.0), bypass temporal history (TAAU) 

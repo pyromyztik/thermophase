@@ -14,7 +14,8 @@ const char* settingsDescriptions[] = {
     "Select false-color palette for thermal gradients",
     "Horizontally flip thermal video stream",
     "Open upscaler menu to configure interpolation modes",
-    "Select I2C clock: 400 kHz (clean & stable - runs at 8fps) or 800 kHz (little more noisy, but runs at 14-15fps)",
+    "Select Thermal Sensor's I2C clock: 400 kHz (clean & stable - runs at 8fps) or 800 kHz (little more noisy, but runs at 14-15fps)",
+    "Enable or disable the on-board WS2812 RGB target / status indicator LED",
     "Save all settings and return to main menu."
 };
 
@@ -25,6 +26,7 @@ static const char* settingsLabels[] = {
     "Mirror Feed",
     "Upscaling",
     "I2C Clock",
+    "RGB LED",
     "Back to Main Menu"
 };
 
@@ -44,14 +46,14 @@ static void settingsBtnEventCb(lv_event_t* e) {
                 lv_obj_add_flag(settingsArrows[i], LV_OBJ_FLAG_HIDDEN);
             }
         }
-        // When the back option (last item, index 6) is selected, its text and arrow become black on red fill
-        if (idx == 6) {
-            lv_obj_set_style_text_color(settingsNameLabels[6], lv_color_black(), 0);
-            if (settingsArrows[6] != nullptr) {
-                lv_obj_set_style_text_color(settingsArrows[6], lv_color_black(), 0);
+        // When the back option (last item) is selected, its text and arrow become black on red fill
+        if (idx == SETTINGS_COUNT - 1) {
+            lv_obj_set_style_text_color(settingsNameLabels[SETTINGS_COUNT - 1], lv_color_black(), 0);
+            if (settingsArrows[SETTINGS_COUNT - 1] != nullptr) {
+                lv_obj_set_style_text_color(settingsArrows[SETTINGS_COUNT - 1], lv_color_black(), 0);
             }
-        } else if (settingsNameLabels[6] != nullptr) {
-            lv_obj_set_style_text_color(settingsNameLabels[6], UI_COLOR_TEXT_DIM, 0);
+        } else if (settingsNameLabels[SETTINGS_COUNT - 1] != nullptr) {
+            lv_obj_set_style_text_color(settingsNameLabels[SETTINGS_COUNT - 1], UI_COLOR_TEXT_DIM, 0);
         }
 
         // Update 1-line description
@@ -63,8 +65,8 @@ static void settingsBtnEventCb(lv_event_t* e) {
         lv_obj_scroll_to_view(btn, LV_ANIM_ON);
 
     } else if (code == LV_EVENT_DEFOCUSED) {
-        if (idx == 6 && settingsNameLabels[6] != nullptr) {
-            lv_obj_set_style_text_color(settingsNameLabels[6], UI_COLOR_TEXT_DIM, 0);
+        if (idx == SETTINGS_COUNT - 1 && settingsNameLabels[SETTINGS_COUNT - 1] != nullptr) {
+            lv_obj_set_style_text_color(settingsNameLabels[SETTINGS_COUNT - 1], UI_COLOR_TEXT_DIM, 0);
         }
     } else if (code == LV_EVENT_CLICKED) {
         switch (idx) {
@@ -98,7 +100,12 @@ static void settingsBtnEventCb(lv_event_t* e) {
                 setI2CSpeedSetting(nextSpeed);
                 break;
             }
-            case 6: // Back to Main Menu
+            case 6: { // RGB LED: OFF <-> ON
+                bool nextRgb = !getRgbLedEnabledSetting();
+                setRgbLedEnabledSetting(nextRgb);
+                break;
+            }
+            case 7: // Back to Main Menu
                 saveSettingsIfDirty();
                 uiNavToMainMenu();
                 return;
@@ -130,6 +137,7 @@ void updateSettingsValues() {
     const char* palStrs[3] = {"Ironbow", "White-Hot", "Rainbow"};
     const char* mirStrs[2] = {"OFF", "ON"};
     const char* scaleStrs[5] = {"Nearest", "Bilinear", "Bicubic", "Lanczos", "TAAU"};
+    const char* onOffStrs[2] = {"OFF", "ON"};
 
     if (settingsValLabels[1]) lv_label_set_text(settingsValLabels[1], unitStrs[getTempUnitSetting() % 3]);
     if (settingsValLabels[2]) lv_label_set_text(settingsValLabels[2], palStrs[getPaletteSetting() % 3]);
@@ -137,6 +145,9 @@ void updateSettingsValues() {
     if (settingsValLabels[4]) lv_label_set_text(settingsValLabels[4], scaleStrs[getScalingModeSetting() % 5]);
     if (settingsValLabels[5]) {
         lv_label_set_text(settingsValLabels[5], (getI2CSpeedSetting() == I2C_SPEED_800K) ? "800 kHz" : "400 kHz");
+    }
+    if (settingsValLabels[6]) {
+        lv_label_set_text(settingsValLabels[6], onOffStrs[getRgbLedEnabledSetting() ? 1 : 0]);
     }
 }
 
@@ -157,6 +168,9 @@ void buildSettingsScreen() {
     lv_obj_t* line_top = lv_line_create(screen_settings);
     lv_line_set_points(line_top, h_line_pts, 2);
     lv_obj_add_style(line_top, &style_divider, 0);
+
+    // Top-right Battery Indicator (Percentage to the left of the icon)
+    createBatteryIndicator(screen_settings, true, LV_ALIGN_TOP_RIGHT, -14, 11);
 
     // Vertical Divider Line separating options from right-hand contextual hints
     static lv_point_t v_line_pts[] = {{216, 32}, {216, 216}};
@@ -186,7 +200,7 @@ void buildSettingsScreen() {
         lv_obj_set_pos(settingsBtns[i], 2, i * (itemH + spacing));
         lv_obj_set_size(settingsBtns[i], 198, itemH);
         lv_obj_add_style(settingsBtns[i], &style_btn_default, 0);
-        if (i == 6) {
+        if (i == SETTINGS_COUNT - 1) {
             // Back item: filled with dark grey and accent border when focused
             lv_obj_add_style(settingsBtns[i], &style_btn_back_focused, LV_STATE_FOCUSED);
             lv_obj_add_style(settingsBtns[i], &style_btn_back_focused, LV_STATE_FOCUS_KEY);
@@ -198,7 +212,7 @@ void buildSettingsScreen() {
 
         // Arrow indicator
         settingsArrows[i] = lv_label_create(settingsBtns[i]);
-        if (i == 6) {
+        if (i == SETTINGS_COUNT - 1) {
             lv_label_set_text(settingsArrows[i], LV_SYMBOL_LEFT);
             lv_obj_set_style_text_color(settingsArrows[i], lv_color_black(), 0);
         } else {
@@ -214,10 +228,10 @@ void buildSettingsScreen() {
         lv_label_set_text(settingsNameLabels[i], settingsLabels[i]);
         lv_obj_align(settingsNameLabels[i], LV_ALIGN_LEFT_MID, 13, 0);
         lv_obj_set_style_text_font(settingsNameLabels[i], &lv_font_montserrat_12, 0);
-        lv_obj_set_style_text_color(settingsNameLabels[i], (i == 6) ? UI_COLOR_TEXT_DIM : UI_COLOR_TEXT, 0);
+        lv_obj_set_style_text_color(settingsNameLabels[i], (i == SETTINGS_COUNT - 1) ? UI_COLOR_TEXT_DIM : UI_COLOR_TEXT, 0);
 
         // Setting Value (Right column)
-        if (i < 6) {
+        if (i < SETTINGS_COUNT - 1) {
             settingsValLabels[i] = lv_label_create(settingsBtns[i]);
             lv_obj_align(settingsValLabels[i], LV_ALIGN_RIGHT_MID, -3, 0);
             lv_obj_set_style_text_color(settingsValLabels[i], UI_COLOR_ACCENT, 0);

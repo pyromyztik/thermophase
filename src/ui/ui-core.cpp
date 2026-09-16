@@ -4,6 +4,7 @@
 #include "power.hpp"
 #include "ppt.hpp"
 #include "storage.hpp"
+#include "rgb-led.hpp"
 
 // Active application state
 static AppState currentAppState = APP_STATE_BOOT;
@@ -15,6 +16,7 @@ static bool currentMirrorSetting = MIRROR_HORIZONTAL;
 static ScalingMode currentScalingSetting = SCALING_BICUBIC;
 static uint8_t currentBrightnessSetting = TFT_DEFAULT_BRIGHTNESS;
 static uint32_t currentI2CSpeedSetting = I2C_FREQ_RUN;
+static bool currentRgbLedSetting = true;
 
 // Screen pointers
 lv_obj_t* screen_boot = nullptr;
@@ -113,6 +115,109 @@ static void buildStyles() {
 }
 
 // -------------------------------------------------------------
+// BATTERY UI INDICATOR MANAGEMENT
+// -------------------------------------------------------------
+struct BatteryIndicatorEntry {
+    lv_obj_t* icon;
+    lv_obj_t* pct;
+};
+static constexpr size_t MAX_BATTERY_INDICATORS = 8;
+static BatteryIndicatorEntry batteryIndicators[MAX_BATTERY_INDICATORS];
+static size_t numBatteryIndicators = 0;
+
+void createBatteryIndicator(lv_obj_t* parent, bool showPercentage, lv_align_t align, lv_coord_t x_ofs, lv_coord_t y_ofs) {
+    if (!parent || numBatteryIndicators >= MAX_BATTERY_INDICATORS) return;
+
+    // Battery Icon Label
+    lv_obj_t* icon = lv_label_create(parent);
+    lv_label_set_text(icon, LV_SYMBOL_BATTERY_FULL);
+    lv_obj_set_style_text_font(icon, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(icon, UI_COLOR_TEXT, 0);
+    lv_obj_align(icon, align, x_ofs, y_ofs);
+
+    lv_obj_t* pct = nullptr;
+    if (showPercentage) {
+        pct = lv_label_create(parent);
+        lv_label_set_text(pct, "--%");
+        lv_obj_set_style_text_font(pct, &lv_font_montserrat_10, 0);
+        lv_obj_set_style_text_color(pct, UI_COLOR_TEXT, 0);
+        lv_obj_align_to(pct, icon, LV_ALIGN_OUT_LEFT_MID, -4, 0);
+    }
+
+    batteryIndicators[numBatteryIndicators++] = {icon, pct};
+}
+
+static uint32_t lastBatteryUIUpdateTime = 0;
+static BatteryState lastBatteryUIState = (BatteryState)255;
+
+void updateBatteryUI(bool force) {
+    // 1. Take a sample every 1000ms to maintain the rolling 30-second average window
+    sampleBattery();
+
+    BatteryState state = getBatteryState();
+    uint32_t now = millis();
+
+    // 2. Only update UI widgets every 30 seconds (30000ms), UNLESS:
+    //    - force is true (e.g. cold boot)
+    //    - operational state changed (e.g. charger plugged in / switch flipped)
+    if (!force && (state == lastBatteryUIState) && (now - lastBatteryUIUpdateTime < 30000)) {
+        return;
+    }
+
+    lastBatteryUIUpdateTime = now;
+    lastBatteryUIState = state;
+
+    uint8_t pct = getBatteryPercentage();
+
+    const char* sym = LV_SYMBOL_BATTERY_FULL;
+    char pctStr[12] = "";
+    lv_color_t col = UI_COLOR_TEXT;
+
+    if (state == BATTERY_DISCONNECTED) {
+        sym = LV_SYMBOL_USB;
+        snprintf(pctStr, sizeof(pctStr), "USB");
+        col = UI_COLOR_CYAN;
+    } else if (state == BATTERY_CHARGING) {
+        sym = LV_SYMBOL_CHARGE;
+        snprintf(pctStr, sizeof(pctStr), "%d%%", pct);
+        col = UI_COLOR_GREEN;
+    } else {
+        // Normal discharging battery operation
+        if (pct < 15) {
+            sym = LV_SYMBOL_BATTERY_EMPTY;
+            col = UI_COLOR_ACCENT;
+        } else if (pct < 35) {
+            sym = LV_SYMBOL_BATTERY_1;
+            col = UI_COLOR_YELLOW;
+        } else if (pct < 65) {
+            sym = LV_SYMBOL_BATTERY_2;
+            col = UI_COLOR_TEXT;
+        } else if (pct < 90) {
+            sym = LV_SYMBOL_BATTERY_3;
+            col = UI_COLOR_TEXT;
+        } else {
+            sym = LV_SYMBOL_BATTERY_FULL;
+            col = UI_COLOR_TEXT;
+        }
+        snprintf(pctStr, sizeof(pctStr), "%d%%", pct);
+    }
+
+    for (size_t i = 0; i < numBatteryIndicators; i++) {
+        if (batteryIndicators[i].icon != nullptr && lv_obj_is_valid(batteryIndicators[i].icon)) {
+            lv_label_set_text(batteryIndicators[i].icon, sym);
+            lv_obj_set_style_text_color(batteryIndicators[i].icon, col, 0);
+        }
+        if (batteryIndicators[i].pct != nullptr && lv_obj_is_valid(batteryIndicators[i].pct)) {
+            lv_label_set_text(batteryIndicators[i].pct, pctStr);
+            lv_obj_set_style_text_color(batteryIndicators[i].pct, col, 0);
+            if (batteryIndicators[i].icon != nullptr && lv_obj_is_valid(batteryIndicators[i].icon)) {
+                lv_obj_align_to(batteryIndicators[i].pct, batteryIndicators[i].icon, LV_ALIGN_OUT_LEFT_MID, -4, 0);
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------
 // UI INITIALIZATION
 // -------------------------------------------------------------
 void initUI() {
@@ -144,6 +249,10 @@ void initUI() {
     // Initial state: Boot Screen
     currentAppState = APP_STATE_BOOT;
     lv_scr_load(screen_boot);
+
+    // Register autonomous 1000ms LVGL sampling timer and perform initial forced UI refresh
+    lv_timer_create([](lv_timer_t*) { updateBatteryUI(); }, 1000, NULL);
+    updateBatteryUI(true);
 
     Serial.println("[UI] LVGL UI initialized successfully with animations.");
 }
@@ -203,6 +312,20 @@ void setI2CSpeedSetting(uint32_t speedHz) {
         currentI2CSpeedSetting = speedHz;
         setSensorI2CSpeed(speedHz);
         markSettingsDirty();
+    }
+}
+bool getRgbLedEnabledSetting() {
+    return currentRgbLedSetting;
+}
+void setRgbLedEnabledSetting(bool enabled) {
+    if (currentRgbLedSetting != enabled) {
+        currentRgbLedSetting = enabled;
+        markSettingsDirty();
+        if (!enabled) {
+            onboardLED.clear();
+            onboardLED.setPixelColor(0, 0);
+            onboardLED.show();
+        }
     }
 }
 

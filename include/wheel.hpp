@@ -20,6 +20,9 @@ bool initWheel();
 // Poll for an available wheel event (non-blocking by default)
 bool getWheelEvent(WheelEventType& outEvent, TickType_t waitTicks = 0);
 
+// Post a wheel event into the event queue (used by hardware and serial emulator)
+bool postWheelEvent(WheelEventType evt);
+
 // FreeRTOS background task scanning wheel state with debouncing
 void wheelTask(void *pvParameters);
 

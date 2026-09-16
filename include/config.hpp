@@ -9,8 +9,8 @@
 // ==========================================================
 
 // MLX90640 I2C Pins (as in MLX90640 Test)
-#define PIN_I2C_SDA       8
-#define PIN_I2C_SCL       9
+#define PIN_I2C_SDA       16
+#define PIN_I2C_SCL       17
 #define I2C_FREQ_INIT     400000
 #define I2C_SPEED_400K    400000
 #define I2C_SPEED_800K    800000
@@ -23,7 +23,7 @@
 #define TFT_MOSI          41  // SPI MOSI (SDI on display)
 #define TFT_SCK           40  // SPI Clock (SCK on display)
 #define TFT_MISO          39  // SPI MISO (SDO on display)
-#define TFT_LED           21  // Backlight control (PWM)
+#define TFT_LED           47  // Backlight control (PWM)
 #define TFT_LED_PWM_CHANNEL  0   // LEDC PWM Channel
 #define TFT_LED_PWM_FREQ     5000// 5 kHz eliminates backlight flicker
 #define TFT_LED_PWM_RES      8   // 8-bit resolution (0 - 255)
@@ -43,6 +43,10 @@
 #define PIN_WHEEL_CLK     4   // Rotary CLK (Pin 4 on J1)
 #define PIN_WHEEL_DT      5   // Rotary DT  (Pin 5 on J1)
 #define PIN_WHEEL_SW      6   // Push Button Switch (Pin 6 on J1)
+
+// LiPo Battery Monitoring (100k / 100k Voltage Divider on GPIO 8)
+#define PIN_BATTERY_ADC        8      // ADC1 Channel 7
+#define BATTERY_DIVIDER_RATIO  2.0f   // (R1 + R2) / R2 = (100k + 100k) / 100k = 2.0
 
 
 
@@ -76,8 +80,7 @@
 // NOTE: Adafruit_MLX90640::getFrame() reads TWO subpages (0 & 1) to calculate each full frame.
 // - MLX90640_16_HZ -> 16 subpages/s / 2 = ~8 FPS  (maximum reliable rate at 400 kHz I2C)
 // - MLX90640_32_HZ -> 32 subpages/s / 2 = ~11-13 FPS (maximum reliable rate at 800 kHz I2C)
-// - MLX90640_64_HZ -> INCOMPATIBLE (reading 1668 bytes over I2C takes ~21ms at 800kHz, which exceeds 
-//                      the 15.6ms 64Hz period, causing permanent I2C bus overrun collisions!)
+// - MLX90640_64_HZ -> INCOMPATIBLE (reading 1668 bytes over I2C takes ~21ms at 800kHz, which exceeds the 15.6ms 64Hz period, causing permanent I2C bus overrun collisions!)
 #define THERMAL_REFRESH_RATE MLX90640_32_HZ
 
 
@@ -93,6 +96,9 @@
 // Flip horizontally (mirror) if needed
 #define MIRROR_HORIZONTAL false
 
+// Flip vertically (mirror) if needed
+#define MIRROR_VERTICAL   true
+
 
 
 // ==========================================================
@@ -100,7 +106,14 @@
 // ==========================================================
 #define DISPLAY_WIDTH     320
 #define DISPLAY_HEIGHT    240
-#define DISPLAY_ROTATION  1   // 1 = Landscape (320x240), 0 = Portrait (240x320)
+
+// Display Orientation:
+// 0 = Normal landscape (320x240, default)
+// 1 = Rotated 180 degrees / upside down landscape (320x240)
+#define DISPLAY_ROTATION  1
+
+// Hardware ILI9341 rotation mapping (rotation 1: normal landscape, rotation 3: 180-deg rotated landscape)
+#define TFT_ROTATION      ((DISPLAY_ROTATION == 1) ? 3 : 1)
 
 // SPI Clock for TFT: 40 MHz pushes the full 320x240 frame in ~30 ms, eliminating rolling shutter
 #define TFT_SPI_FREQ      40000000

@@ -8,6 +8,7 @@
 #include "ui.hpp"
 #include "power.hpp"
 #include "storage.hpp"
+#include "serial.hpp"
 
 // Global task handles
 TaskHandle_t sensorTaskHandle = NULL;
@@ -27,6 +28,7 @@ void setup() {
 
     // Initialize power state and check if awakened from Deep Sleep
     powerWakeInit();
+    initBatteryMonitor();
 
     Serial.begin(115200);
     while (!Serial && millis() < 800) 
@@ -115,37 +117,8 @@ void setup() {
 static unsigned long lastTelemetryTime = 0;
 
 void loop() {
-    // Check for user command over Serial Monitor
-    if (Serial.available()) {
-        String input = Serial.readStringUntil('\n');
-        input.trim();
-
-        if (input.equalsIgnoreCase("diagnostics")) {
-            if (diagTaskHandle == NULL) {
-                Serial.println("\n[CMD] Spawning System Diagnostics Task...");
-                xTaskCreatePinnedToCore(
-                    diagnosticsMessageTask,
-                    "Diag_Task",
-                    DIAG_TASK_STACK,
-                    NULL,
-                    DIAG_TASK_PRIO,
-                    &diagTaskHandle,
-                    DIAG_TASK_CORE
-                );
-            } else {
-                Serial.println("\n[WARN] Diagnostics task is already running.");
-            }
-        } else if (input.equalsIgnoreCase("compute") ||
-                   input.equalsIgnoreCase("perf") ||
-                   input.equalsIgnoreCase("headroom") ||
-                   input.equalsIgnoreCase("profile")) {
-            printComputeHeadroomReport();
-        } else if (input.equalsIgnoreCase("help")) {
-            Serial.println("\nAvailable Serial Commands:");
-            Serial.println("  'compute' / 'perf'  - Print real-time CPU compute & headroom audit");
-            Serial.println("  'diagnostics'       - Run complete system & Wi-Fi scan diagnostics");
-        }
-    }
+    // Process keyboard & serial commands for encoder emulation
+    processSerialInput();
 
     // Continuous status and error reporting every 2500 ms
     unsigned long now = millis();
