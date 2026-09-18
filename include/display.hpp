@@ -27,6 +27,8 @@ ScalingMode getScalingMode();
 void resetScalerHistory();
 void setDisplayBrightness(uint8_t percent);
 uint8_t getDisplayBrightness();
+void setDisplayRotation(uint8_t rotation);
+uint8_t getDisplayRotation();
 
 // Buffer and palette accessors for thermal pipeline
 uint16_t* getThermalFrameBuffer();

@@ -69,9 +69,9 @@ bool ThermalScaler::init(int maxW, int maxH) {
         Serial.println("[SCALER] Warning: PSRAM allocation failed for HistB, trying internal RAM...");
         m_histB = (float*)malloc(histBytes);
     }
-    // Allocate separable intermediate rows (32 rows x 320 cols = 40 KB)
+    // Allocate separable intermediate rows in Octal PSRAM (32 rows x 320 cols = 40 KB)
     size_t interBytes = 32 * m_maxW * sizeof(float);
-    m_intermediateRows = (float*)heap_caps_malloc(interBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    m_intermediateRows = (float*)heap_caps_malloc(interBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (m_intermediateRows == nullptr) 
         m_intermediateRows = (float*)malloc(interBytes);
 

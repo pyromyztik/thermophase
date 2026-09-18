@@ -62,3 +62,6 @@ uint32_t getSensorI2CSpeed();
 // Sensor noise and bad pixel correction
 void cleanSensorOutliers(float* temps);
 void filterSnapshotFrame(const float* src, float* dst);
+void filterPeakPreservingMedian(const float* src, float* dst, float peakThreshold = 2.5f);
+void setLiveDenoiseEnabled(bool enabled);
+bool getLiveDenoiseEnabled();

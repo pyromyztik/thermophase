@@ -9,6 +9,7 @@
 #include "power.hpp"
 #include "storage.hpp"
 #include "serial.hpp"
+#include "ble.hpp"
 
 // Global task handles
 TaskHandle_t sensorTaskHandle = NULL;
@@ -41,6 +42,9 @@ void setup() {
 
     // Load user settings from ESP32 NVS (Preferences) before initializing Display & UI
     loadSettings();
+
+    // Initialize BLE Subsystem (Nordic UART Service, advertising as "thermophase")
+    initBLE("thermophase");
 
     // 1. Initialize ILI9341 Display & Bilinear tables FIRST and render Boot Screen
     // (TFT_LED is kept LOW until the boot screen is drawn in canvas and pushed to LCD memory)
@@ -101,7 +105,7 @@ void setup() {
     delay(350); // Clean, polished hold so user sees full boot completion
 
     // 9. Create Display & Bilinear scaling task on Core 1
-    xTaskCreatePinnedToCore(
+    BaseType_t resDisp = xTaskCreatePinnedToCore(
         displayTask,
         "Display_Task",
         DISPLAY_TASK_STACK,
@@ -110,7 +114,11 @@ void setup() {
         &displayTaskHandle,
         DISPLAY_TASK_CORE
     );
-    Serial.println("\n[SYSTEM] All parallel tasks spawned successfully!");
+    if (resDisp != pdPASS) {
+        Serial.printf("[MAIN] ERROR: Failed to spawn Display_Task! res=%d, free DRAM=%u\n", resDisp, ESP.getFreeHeap());
+    } else {
+        Serial.println("\n[SYSTEM] All parallel tasks spawned successfully!");
+    }
     Serial.println("[SYSTEM] Type 'diagnostics' in Serial Monitor to run hardware diagnostics.\n");
 }
 
@@ -171,15 +179,39 @@ void loop() {
             Serial.printf("\n Uptime: %lu s | Free Heap: %u bytes\n", now / 1000, ESP.getFreeHeap());
             Serial.println("****************************************************************\n");
         } else {
-            // All systems healthy: periodic telemetry with compute headroom metrics
-            Serial.printf("[HEALTHY] Live Feed: %.1f FPS | Spot: %.1f C | Range: [%.1f - %.1f C] | Uptime: %lu s\n",
-                          displayFps, displayCenterTemp, displayMinTemp, displayMaxTemp, now / 1000);
-            Serial.printf(" [COMPUTE] Core 1 (Display/Upscale): %4.1f%% (Scale: %4.1f ms, UI+Flush: %4.1f ms) | Headroom: %4.1f ms (%4.1f%%)\n",
-                          globalComputeStats.core1LoadPct, globalComputeStats.scaleTimeMs, globalComputeStats.flushTimeMs,
-                          globalComputeStats.core1HeadroomMs, globalComputeStats.core1HeadroomPct);
-            Serial.printf(" [COMPUTE] Core 0 (Sensor/I2C):     %4.1f%% (I2C: %4.1f ms) | Free DRAM: %u KB | Free PSRAM: %u KB\n\n",
-                          globalComputeStats.core0LoadPct, globalComputeStats.sensorReadMs,
-                          ESP.getFreeHeap() / 1024, ESP.getFreePsram() / 1024);
+            // Scaling mode string helper
+            ScalingMode curMode = getScalingModeSetting();
+            const char* modeName = "Unknown";
+            switch (curMode) {
+                case SCALING_NEAREST:  modeName = "Nearest"; break;
+                case SCALING_BILINEAR: modeName = "Bilinear"; break;
+                case SCALING_BICUBIC:  modeName = "Bicubic"; break;
+                case SCALING_LANCZOS:  modeName = "Lanczos"; break;
+                case SCALING_TAAU:     modeName = "TAAU"; break;
+            }
+
+            BatteryTelemetry bt;
+            getBatteryTelemetry(bt);
+            const char* stateStr = (bt.state == BATTERY_CHARGING) ? "CHARGING" :
+                                   (bt.state == BATTERY_DISCHARGING) ? "DISCHARGING" : "DISCONNECTED";
+
+            // All systems healthy: comprehensive periodic telemetry (USB + BLE)
+            outPrintf("[SYS] Feed: %4.1f FPS | Spot: %4.1f C [%4.1f - %4.1f C] | Uptime: %lu s | BLE: %s\n",
+                      displayFps, displayCenterTemp, displayMinTemp, displayMaxTemp, now / 1000,
+                      isBLEConnected() ? "CONNECTED" : "ADVERTISING");
+            outPrintf(" [BATT] V_inst: %.3fV | V_avg: %.3fV | Step: %+.3fV | Drift: %+.3fV | State: %s (%u%%) | Deb: C=%u/4, D=%u/3 | Cand: %s (%s)\n",
+                      bt.instantV, bt.avgV, bt.step, bt.drift, stateStr, bt.percentage,
+                      bt.chargeDebounce, bt.dischargeDebounce, bt.candidate, bt.reason);
+            outPrintf(" [DISP] Mode: %s | Live Denoise: %s | Rotation: %s | Brightness: %u%%\n",
+                      modeName, getLiveDenoiseSetting() ? "ON" : "OFF",
+                      (getDisplayRotationSetting() == 0) ? "0 deg" : "180 deg",
+                      getDisplayBrightnessSetting());
+            outPrintf(" [COMP] Core 1: %4.1f%% (Scale: %4.1f ms, Flush: %4.1f ms, Headroom: %4.1f ms / %4.1f%%)\n",
+                      globalComputeStats.core1LoadPct, globalComputeStats.scaleTimeMs, globalComputeStats.flushTimeMs,
+                      globalComputeStats.core1HeadroomMs, globalComputeStats.core1HeadroomPct);
+            outPrintf(" [COMP] Core 0: %4.1f%% (I2C: %4.1f ms) | Free DRAM: %u KB | Free PSRAM: %u KB\n\n",
+                      globalComputeStats.core0LoadPct, globalComputeStats.sensorReadMs,
+                      ESP.getFreeHeap() / 1024, ESP.getFreePsram() / 1024);
         }
     }
 

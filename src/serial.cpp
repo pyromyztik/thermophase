@@ -4,6 +4,7 @@
 #include "display.hpp"
 #include "ui.hpp"
 #include "diagnostics.hpp"
+#include "ble.hpp"
 
 extern TaskHandle_t diagTaskHandle;
 
@@ -96,8 +97,8 @@ void processSerialInput() {
     static uint32_t lastEnterCharTime = 0;
     static bool enterLongPressSent = false;
 
-    while (Serial.available() > 0) {
-        char c = (char)Serial.read();
+    while (Serial.available() > 0 || bleAvailable() > 0) {
+        char c = (Serial.available() > 0) ? (char)Serial.read() : (char)bleRead();
 
         // 1. ANSI Escape Sequence parsing for Arrow keys
         if (escState == ESC_IDLE) {

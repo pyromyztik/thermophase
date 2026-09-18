@@ -50,8 +50,8 @@ volatile float displayCenterTemp = 0.0f;
 volatile float displayMinTemp = 0.0f;
 volatile float displayMaxTemp = 0.0f;
 
-// LVGL Draw Buffer (allocated in internal DMA-capable SRAM: 120 lines = 2 passes, fits comfortably in DRAM)
-#define LVGL_DRAW_BUF_LINES 120
+// LVGL Draw Buffer (allocated in internal DMA-capable SRAM: 40 lines fits with abundant DRAM headroom)
+#define LVGL_DRAW_BUF_LINES 40
 static lv_color_t disp_buf[DISPLAY_WIDTH * LVGL_DRAW_BUF_LINES];
 static lv_disp_draw_buf_t draw_buf;
 static lv_disp_drv_t disp_drv;
@@ -209,17 +209,40 @@ void resetScalerHistory() {
 }
 
 static uint8_t currentDisplayBrightness = TFT_DEFAULT_BRIGHTNESS;
+static uint8_t currentDisplayRotation = DISPLAY_ROTATION;
+static bool displayInitialized = false;
 
 void setDisplayBrightness(uint8_t percent) {
     if (percent > 100) percent = 100;
     if (percent < 10) percent = 10;
     currentDisplayBrightness = percent;
+    if (!displayInitialized) {
+        return;
+    }
     uint32_t duty = ((uint32_t)percent * 255) / 100;
     ledcWrite(TFT_LED_PWM_CHANNEL, duty);
 }
 
 uint8_t getDisplayBrightness() {
     return currentDisplayBrightness;
+}
+
+void setDisplayRotation(uint8_t rotation) {
+    currentDisplayRotation = (rotation != 0) ? 1 : 0;
+    if (!displayInitialized) {
+        return;
+    }
+    scaler.reset();
+    uint8_t hwRot = (currentDisplayRotation == 1) ? 3 : 1;
+    tft.setRotation(hwRot);
+    tft.fillScreen(ILI9341_BLACK);
+    if (lv_disp_get_default() != nullptr && lv_scr_act() != nullptr) {
+        lv_obj_invalidate(lv_scr_act());
+    }
+}
+
+uint8_t getDisplayRotation() {
+    return currentDisplayRotation;
 }
 
 bool checkDisplayConnected() {
@@ -398,7 +421,7 @@ bool initDisplay() {
     SPI.begin(TFT_SCK, TFT_MISO, TFT_MOSI, -1);
 
     tft.begin(TFT_SPI_FREQ);
-    tft.setRotation(TFT_ROTATION);
+    tft.setRotation((currentDisplayRotation == 1) ? 3 : 1);
     tft.fillScreen(ILI9341_BLACK);
 
 #if CHECK_TFT_MISO
@@ -453,6 +476,7 @@ bool initDisplay() {
 
     // Initialize LVGL UI screens & styles
     initUI();
+    displayInitialized = true;
 
     // Register LVGL Input Device Driver (Rotary Wheel)
     lv_indev_drv_init(&indev_drv);
@@ -520,7 +544,7 @@ void displayTask(void *pvParameters) {
                 if (globalDeviceStatus == STATUS_DISPLAY_ERROR) {
                     Serial.println("[TFT] SUCCESS: Display reconnected!");
                     tft.begin(TFT_SPI_FREQ);
-                    tft.setRotation(TFT_ROTATION);
+                    tft.setRotation((currentDisplayRotation == 1) ? 3 : 1);
                     lv_obj_invalidate(lv_scr_act());
                 }
                 displayFailCount = 0;
@@ -624,8 +648,21 @@ void displayTask(void *pvParameters) {
                     int64_t frameIntervalUs = (lastFrameStartUs > 0) ? (frameStartUs - lastFrameStartUs) : 66666;
                     lastFrameStartUs = frameStartUs;
 
-                    // Rotate raw frame (0 for fullscreen landscape, 3 for portrait)
-                    rotateSensorFrame(currentFrame.temperatures, rotatedGrid, activeRot, currentMirrorFeed, MIRROR_VERTICAL);
+                    // Compute effective camera sensor mirroring.
+                    // When display is at 0 degrees (device physically rotated 180° in user's hands),
+                    // the physical sensor is upside-down, so invert both mirror axes (180° rotation) to match reality.
+                    bool flipFeed = (currentDisplayRotation == 0);
+                    bool effMirrorH = flipFeed ? !currentMirrorFeed : currentMirrorFeed;
+                    bool effMirrorV = flipFeed ? !MIRROR_VERTICAL : MIRROR_VERTICAL;
+
+                    // Rotate sensor frame (applying Peak-Preserving Median filter if live denoise is enabled)
+                    if (getLiveDenoiseEnabled()) {
+                        static float denoisedGrid[SENSOR_PIXELS];
+                        filterPeakPreservingMedian(currentFrame.temperatures, denoisedGrid);
+                        rotateSensorFrame(denoisedGrid, rotatedGrid, activeRot, effMirrorH, effMirrorV);
+                    } else {
+                        rotateSensorFrame(currentFrame.temperatures, rotatedGrid, activeRot, effMirrorH, effMirrorV);
+                    }
 
                     // Dynamic scene auto-ranging:
                     // Track robust percentiles (2nd & 98th) smoothly to eliminate single-pixel spikes while staying responsive
@@ -742,7 +779,10 @@ void displayTask(void *pvParameters) {
                 // De-noise and freeze the snapshot frame with edge-preserving 3x3 filter
                 static float snapshotRaw[SENSOR_PIXELS];
                 filterSnapshotFrame(lastValidFrame.temperatures, snapshotRaw);
-                rotateSensorFrame(snapshotRaw, rotatedGrid, activeRot, currentMirrorFeed, MIRROR_VERTICAL);
+                bool flipFeed = (currentDisplayRotation == 0);
+                bool effMirrorH = flipFeed ? !currentMirrorFeed : currentMirrorFeed;
+                bool effMirrorV = flipFeed ? !MIRROR_VERTICAL : MIRROR_VERTICAL;
+                rotateSensorFrame(snapshotRaw, rotatedGrid, activeRot, effMirrorH, effMirrorV);
 
                 float range = smoothedMax - smoothedMin;
                 float effectiveMin = smoothedMin;
@@ -816,7 +856,10 @@ void displayTask(void *pvParameters) {
                 const float* normPhase = pptGetNormalizedPhaseGrid();
 
                 // Rotate raw 32x24 phase grid to match portrait camera orientation
-                rotateSensorFrame(normPhase, rotatedGrid, 3, currentMirrorFeed, MIRROR_VERTICAL);
+                bool flipFeed = (currentDisplayRotation == 0);
+                bool effMirrorH = flipFeed ? !currentMirrorFeed : currentMirrorFeed;
+                bool effMirrorV = flipFeed ? !MIRROR_VERTICAL : MIRROR_VERTICAL;
+                rotateSensorFrame(normPhase, rotatedGrid, 3, effMirrorH, effMirrorV);
 
                 // Upscale directly into thermalFrameBuffer.
                 // For PPT phase maps (static 2D slice, values 0.0-255.0), bypass temporal history (TAAU) 

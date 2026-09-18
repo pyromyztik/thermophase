@@ -5,6 +5,7 @@
 #include "ppt.hpp"
 #include "storage.hpp"
 #include "rgb-led.hpp"
+#include "ble.hpp"
 
 // Active application state
 static AppState currentAppState = APP_STATE_BOOT;
@@ -15,8 +16,11 @@ static PaletteType currentPaletteSetting = PALETTE_IRONBOW;
 static bool currentMirrorSetting = MIRROR_HORIZONTAL;
 static ScalingMode currentScalingSetting = SCALING_BICUBIC;
 static uint8_t currentBrightnessSetting = TFT_DEFAULT_BRIGHTNESS;
+static uint8_t currentDisplayRotationSetting = DISPLAY_ROTATION;
 static uint32_t currentI2CSpeedSetting = I2C_FREQ_RUN;
 static bool currentRgbLedSetting = true;
+static bool currentLiveDenoiseSetting = true;
+static bool currentBLESetting = true;
 
 // Screen pointers
 lv_obj_t* screen_boot = nullptr;
@@ -115,15 +119,149 @@ static void buildStyles() {
 }
 
 // -------------------------------------------------------------
-// BATTERY UI INDICATOR MANAGEMENT
+// BATTERY & WIRELESS UI INDICATOR MANAGEMENT
 // -------------------------------------------------------------
 struct BatteryIndicatorEntry {
     lv_obj_t* icon;
     lv_obj_t* pct;
+    lv_obj_t* ble;
 };
 static constexpr size_t MAX_BATTERY_INDICATORS = 8;
 static BatteryIndicatorEntry batteryIndicators[MAX_BATTERY_INDICATORS];
 static size_t numBatteryIndicators = 0;
+
+// LUCIDE BLUETOOTH ICON (PUA U+E000) - Font definition
+static LV_ATTRIBUTE_LARGE_CONST const uint8_t ble_icon_glyph_bitmap[] = {
+    /* U+E000 */
+    0x0, 0x14, 0x0, 0x0, 0x4, 0xf6, 0x0, 0x0,
+    0x4c, 0xd6, 0xa, 0x64, 0xb4, 0xf1, 0x1d, 0xbc,
+    0xe6, 0x0, 0x1d, 0xf6, 0x0, 0x1, 0xdf, 0x60,
+    0x1, 0xdb, 0xde, 0x60, 0xa6, 0x4b, 0x4f, 0x10,
+    0x4, 0xcd, 0x70, 0x0, 0x4f, 0x60, 0x0, 0x1,
+    0x50, 0x0
+};
+
+static const lv_font_fmt_txt_glyph_dsc_t ble_icon_glyph_dsc[] = {
+    {.bitmap_index = 0, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0} /* id = 0 reserved */,
+    {.bitmap_index = 0, .adv_w = 192, .box_w = 7, .box_h = 12, .ofs_x = 3, .ofs_y = 0}
+};
+
+static const lv_font_fmt_txt_cmap_t ble_icon_cmaps[] = {
+    {
+        .range_start = 57344, .range_length = 1, .glyph_id_start = 1,
+        .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
+    }
+};
+
+#if LVGL_VERSION_MAJOR == 8
+static lv_font_fmt_txt_glyph_cache_t ble_icon_cache;
+#endif
+
+static const lv_font_fmt_txt_dsc_t ble_icon_font_dsc = {
+    .glyph_bitmap = ble_icon_glyph_bitmap,
+    .glyph_dsc = ble_icon_glyph_dsc,
+    .cmaps = ble_icon_cmaps,
+    .kern_dsc = NULL,
+    .kern_scale = 0,
+    .cmap_num = 1,
+    .bpp = 4,
+    .kern_classes = 0,
+    .bitmap_format = 0,
+#if LVGL_VERSION_MAJOR == 8
+    .cache = &ble_icon_cache
+#endif
+};
+
+const lv_font_t ui_font_bluetooth = {
+    .get_glyph_dsc = lv_font_get_glyph_dsc_fmt_txt,
+    .get_glyph_bitmap = lv_font_get_bitmap_fmt_txt,
+    .line_height = 12,
+    .base_line = 0,
+#if !(LVGL_VERSION_MAJOR == 6 && LVGL_VERSION_MINOR == 0)
+    .subpx = LV_FONT_SUBPX_NONE,
+#endif
+#if LV_VERSION_CHECK(7, 4, 0) || LVGL_VERSION_MAJOR >= 8
+    .underline_position = 0,
+    .underline_thickness = 0,
+#endif
+    .dsc = &ble_icon_font_dsc,
+#if LV_VERSION_CHECK(8, 2, 0) || LVGL_VERSION_MAJOR >= 9
+    .fallback = NULL,
+#endif
+    .user_data = NULL,
+};
+
+// ANTIALIASED CIRCLE ICON (PUA U+E001) - 13x13 matching Montserrat 14 play/stop symbols
+static LV_ATTRIBUTE_LARGE_CONST const uint8_t circle_icon_glyph_bitmap[] = {
+    0x00, 0x00, 0x01, 0x34, 0x31, 0x00, 0x00, 0x00,
+    0x00, 0x19, 0xef, 0xff, 0xe9, 0x10, 0x00, 0x00,
+    0x3e, 0xff, 0xff, 0xff, 0xfe, 0x30, 0x00, 0x1e,
+    0xff, 0xff, 0xff, 0xff, 0xfe, 0x10, 0x09, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xf9, 0x01, 0xef, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xe1, 0x3f, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0x34, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xf4, 0x3f, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0x31, 0xef, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xe1, 0x09, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xf9, 0x00, 0x1e, 0xff, 0xff, 0xff, 0xff,
+    0xfe, 0x10, 0x00, 0x3e, 0xff, 0xff, 0xff, 0xfe,
+    0x30, 0x00, 0x00, 0x19, 0xef, 0xff, 0xe9, 0x10,
+    0x00, 0x00, 0x00, 0x01, 0x34, 0x31, 0x00, 0x00,
+    0x00
+};
+
+static const lv_font_fmt_txt_glyph_dsc_t circle_icon_glyph_dsc[] = {
+    {.bitmap_index = 0, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0} /* id = 0 reserved */,
+    {.bitmap_index = 0, .adv_w = 196, .box_w = 15, .box_h = 15, .ofs_x = -1, .ofs_y = -2}
+};
+
+static const lv_font_fmt_txt_cmap_t circle_icon_cmaps[] = {
+    {
+        .range_start = 57345, .range_length = 1, .glyph_id_start = 1,
+        .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
+    }
+};
+
+#if LVGL_VERSION_MAJOR == 8
+static lv_font_fmt_txt_glyph_cache_t circle_icon_cache;
+#endif
+
+static const lv_font_fmt_txt_dsc_t circle_icon_font_dsc = {
+    .glyph_bitmap = circle_icon_glyph_bitmap,
+    .glyph_dsc = circle_icon_glyph_dsc,
+    .cmaps = circle_icon_cmaps,
+    .kern_dsc = NULL,
+    .kern_scale = 0,
+    .cmap_num = 1,
+    .bpp = 4,
+    .kern_classes = 0,
+    .bitmap_format = 0,
+#if LVGL_VERSION_MAJOR == 8
+    .cache = &circle_icon_cache
+#endif
+};
+
+const lv_font_t ui_font_circle = {
+    .get_glyph_dsc = lv_font_get_glyph_dsc_fmt_txt,
+    .get_glyph_bitmap = lv_font_get_bitmap_fmt_txt,
+    .line_height = 16,
+    .base_line = 3,
+#if !(LVGL_VERSION_MAJOR == 6 && LVGL_VERSION_MINOR == 0)
+    .subpx = LV_FONT_SUBPX_NONE,
+#endif
+#if LV_VERSION_CHECK(7, 4, 0) || LVGL_VERSION_MAJOR >= 8
+    .underline_position = -1,
+    .underline_thickness = 1,
+#endif
+    .dsc = &circle_icon_font_dsc,
+#if LV_VERSION_CHECK(8, 2, 0) || LVGL_VERSION_MAJOR >= 9
+    .fallback = NULL,
+#endif
+    .user_data = NULL,
+};
+
+// Spacing offset between Bluetooth icon and battery percentage/icon
+static constexpr lv_coord_t BLE_ICON_SPACING_X = -4;
 
 void createBatteryIndicator(lv_obj_t* parent, bool showPercentage, lv_align_t align, lv_coord_t x_ofs, lv_coord_t y_ofs) {
     if (!parent || numBatteryIndicators >= MAX_BATTERY_INDICATORS) return;
@@ -144,11 +282,26 @@ void createBatteryIndicator(lv_obj_t* parent, bool showPercentage, lv_align_t al
         lv_obj_align_to(pct, icon, LV_ALIGN_OUT_LEFT_MID, -4, 0);
     }
 
-    batteryIndicators[numBatteryIndicators++] = {icon, pct};
+    // Bluetooth Icon Label (left of the battery indicator)
+    lv_obj_t* ble = lv_label_create(parent);
+    lv_label_set_text(ble, UI_SYMBOL_BLUETOOTH);
+    lv_obj_set_style_text_font(ble, &ui_font_bluetooth, 0);
+    lv_obj_set_style_text_color(ble, UI_COLOR_TEXT_DIM, 0);
+    if (pct != nullptr) {
+        lv_obj_align_to(ble, pct, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
+    } else {
+        lv_obj_align_to(ble, icon, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
+    }
+    if (!currentBLESetting) {
+        lv_obj_add_flag(ble, LV_OBJ_FLAG_HIDDEN);
+    }
+    batteryIndicators[numBatteryIndicators++] = {icon, pct, ble};
 }
 
 static uint32_t lastBatteryUIUpdateTime = 0;
 static BatteryState lastBatteryUIState = (BatteryState)255;
+static bool lastBLEUIOn = false;
+static bool lastBLEUIConn = false;
 
 void updateBatteryUI(bool force) {
     // 1. Take a sample every 1000ms to maintain the rolling 30-second average window
@@ -157,15 +310,26 @@ void updateBatteryUI(bool force) {
     BatteryState state = getBatteryState();
     uint32_t now = millis();
 
+    bool bleOn = currentBLESetting && isBLEEnabled();
+    bool bleConn = isBLEConnected();
+    bool bleChanged = (bleOn != lastBLEUIOn) || (bleConn != lastBLEUIConn);
+
     // 2. Only update UI widgets every 30 seconds (30000ms), UNLESS:
     //    - force is true (e.g. cold boot)
     //    - operational state changed (e.g. charger plugged in / switch flipped)
-    if (!force && (state == lastBatteryUIState) && (now - lastBatteryUIUpdateTime < 30000)) {
+    //    - BLE status changed (connected/disconnected/toggled)
+    if (!force && !bleChanged && (state == lastBatteryUIState) && (now - lastBatteryUIUpdateTime < 30000)) {
         return;
     }
 
     lastBatteryUIUpdateTime = now;
     lastBatteryUIState = state;
+    lastBLEUIOn = bleOn;
+    lastBLEUIConn = bleConn;
+
+    if (bleChanged && currentAppState == APP_STATE_MAIN_MENU) {
+        refreshMainMenuBLEState(false);
+    }
 
     uint8_t pct = getBatteryPercentage();
 
@@ -202,6 +366,8 @@ void updateBatteryUI(bool force) {
         snprintf(pctStr, sizeof(pctStr), "%d%%", pct);
     }
 
+    lv_color_t bleCol = bleConn ? lv_color_hex(0x2196F3) : UI_COLOR_TEXT_DIM; // Bright blue when connected!
+
     for (size_t i = 0; i < numBatteryIndicators; i++) {
         if (batteryIndicators[i].icon != nullptr && lv_obj_is_valid(batteryIndicators[i].icon)) {
             lv_label_set_text(batteryIndicators[i].icon, sym);
@@ -212,6 +378,19 @@ void updateBatteryUI(bool force) {
             lv_obj_set_style_text_color(batteryIndicators[i].pct, col, 0);
             if (batteryIndicators[i].icon != nullptr && lv_obj_is_valid(batteryIndicators[i].icon)) {
                 lv_obj_align_to(batteryIndicators[i].pct, batteryIndicators[i].icon, LV_ALIGN_OUT_LEFT_MID, -4, 0);
+            }
+        }
+        if (batteryIndicators[i].ble != nullptr && lv_obj_is_valid(batteryIndicators[i].ble)) {
+            if (bleOn) {
+                lv_obj_clear_flag(batteryIndicators[i].ble, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_set_style_text_color(batteryIndicators[i].ble, bleCol, 0);
+                if (batteryIndicators[i].pct != nullptr && lv_obj_is_valid(batteryIndicators[i].pct)) {
+                    lv_obj_align_to(batteryIndicators[i].ble, batteryIndicators[i].pct, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
+                } else if (batteryIndicators[i].icon != nullptr && lv_obj_is_valid(batteryIndicators[i].icon)) {
+                    lv_obj_align_to(batteryIndicators[i].ble, batteryIndicators[i].icon, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
+                }
+            } else {
+                lv_obj_add_flag(batteryIndicators[i].ble, LV_OBJ_FLAG_HIDDEN);
             }
         }
     }
@@ -273,6 +452,7 @@ PaletteType getPaletteSetting() { return currentPaletteSetting; }
 bool getMirrorSetting() { return currentMirrorSetting; }
 ScalingMode getScalingModeSetting() { return currentScalingSetting; }
 uint8_t getDisplayBrightnessSetting() { return currentBrightnessSetting; }
+uint8_t getDisplayRotationSetting() { return currentDisplayRotationSetting; }
 
 void setTempUnitSetting(TempUnit unit) {
     if (currentTempUnitSetting != unit) {
@@ -304,6 +484,14 @@ void setDisplayBrightnessSetting(uint8_t percent) {
         markSettingsDirty();
     }
 }
+void setDisplayRotationSetting(uint8_t rot) {
+    uint8_t normalized = (rot != 0) ? 1 : 0;
+    if (currentDisplayRotationSetting != normalized) {
+        currentDisplayRotationSetting = normalized;
+        setDisplayRotation(normalized);
+        markSettingsDirty();
+    }
+}
 uint32_t getI2CSpeedSetting() {
     return currentI2CSpeedSetting;
 }
@@ -326,6 +514,27 @@ void setRgbLedEnabledSetting(bool enabled) {
             onboardLED.setPixelColor(0, 0);
             onboardLED.show();
         }
+    }
+}
+bool getLiveDenoiseSetting() {
+    return currentLiveDenoiseSetting;
+}
+void setLiveDenoiseSetting(bool enabled) {
+    if (currentLiveDenoiseSetting != enabled) {
+        currentLiveDenoiseSetting = enabled;
+        setLiveDenoiseEnabled(enabled);
+        markSettingsDirty();
+    }
+}
+bool getBLEEnabledSetting() {
+    return currentBLESetting;
+}
+void setBLEEnabledSetting(bool enabled) {
+    if (currentBLESetting != enabled) {
+        currentBLESetting = enabled;
+        setBLEEnabled(enabled);
+        markSettingsDirty();
+        updateBatteryUI(true);
     }
 }
 
@@ -363,6 +572,14 @@ void uiNavToThermal() {
     lv_group_remove_all_objs(ui_wheel_group);
     WheelEventType dummy;
     while (getWheelEvent(dummy, 0)) { }
+
+    // On initial boot transition to live feed, calibrate battery under real operational load
+    static bool initialLoadPrimed = false;
+    if (!initialLoadPrimed) {
+        initialLoadPrimed = true;
+        reprimeBatteryUnderLoad();
+        updateBatteryUI(true);
+    }
 
     // Quick crossfade (100 ms) between thermal feed and main menu
     lv_scr_load_anim(screen_thermal, LV_SCR_LOAD_ANIM_FADE_ON, 100, 0, false);
@@ -428,19 +645,7 @@ void uiNavToMainMenu() {
     if (prevState == APP_STATE_PPT_ARMED || prevState == APP_STATE_PPT_ACQUIRING || prevState == APP_STATE_PPT_INSPECT) {
         setSensorI2CSpeed(currentI2CSpeedSetting);
     }
-    lv_group_remove_all_objs(ui_wheel_group);
-
-    for (int i = 0; i < MAIN_MENU_COUNT; ++i) {
-        lv_group_add_obj(ui_wheel_group, mainMenuBtns[i]);
-    }
-    for (int i = 0; i < MAIN_MENU_COUNT; ++i) {
-        if (i == 0) {
-            lv_obj_clear_flag(mainMenuArrows[i], LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(mainMenuArrows[i], LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-    lv_group_focus_obj(mainMenuBtns[0]);
+    refreshMainMenuBLEState(true);
 
     WheelEventType dummy;
     while (getWheelEvent(dummy, 0)) { }
@@ -473,10 +678,27 @@ void uiNavToSettings(int focusIndex) {
     }
     lv_group_focus_obj(settingsBtns[focusIndex]);
     if (settings_desc_label != nullptr) {
-        lv_label_set_text(settings_desc_label, settingsDescriptions[focusIndex]);
+        if (focusIndex == 8) {
+            char bleDesc[140];
+            if (!getBLEEnabledSetting()) {
+                snprintf(bleDesc, sizeof(bleDesc), "Bluetooth is OFF (saves ~35-45 mA / ~12%% battery). Click to enable wireless telemetry.");
+            } else if (isBLEConnected()) {
+                const char* client = getBLEConnectedClientInfo();
+                snprintf(bleDesc, sizeof(bleDesc), "Connected to: %s. Streaming live battery & thermal telemetry.", (client && client[0]) ? client : "Device");
+            } else {
+                snprintf(bleDesc, sizeof(bleDesc), "Bluetooth ON: Advertising as 'thermophase'. Streams live telemetry to Web Terminal.");
+            }
+            lv_label_set_text(settings_desc_label, bleDesc);
+        } else {
+            lv_label_set_text(settings_desc_label, settingsDescriptions[focusIndex]);
+        }
     }
     if (settings_list != nullptr) {
-        lv_obj_scroll_to_view(settingsBtns[focusIndex], LV_ANIM_OFF);
+        if (focusIndex == 0) {
+            lv_obj_scroll_to_y(settings_list, 0, LV_ANIM_OFF);
+        } else {
+            lv_obj_scroll_to_view(settingsBtns[focusIndex], LV_ANIM_OFF);
+        }
     }
 
     WheelEventType dummy;
@@ -526,7 +748,11 @@ void uiNavToScalingMenu() {
     updateScalingValues();
     updateScalingDesc(initialFocus);
     if (scaling_list != nullptr) {
-        lv_obj_scroll_to_view(scalingBtns[initialFocus], LV_ANIM_OFF);
+        if (initialFocus == 0) {
+            lv_obj_scroll_to_y(scaling_list, 0, LV_ANIM_OFF);
+        } else {
+            lv_obj_scroll_to_view(scalingBtns[initialFocus], LV_ANIM_OFF);
+        }
     }
 
     WheelEventType dummy;

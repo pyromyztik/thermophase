@@ -59,6 +59,7 @@ enum ScalingMode {
 #define UI_COLOR_CYAN             lv_color_hex(0x00E5FF)   // Min temp readout
 #define UI_COLOR_ORANGE           lv_color_hex(0xFF9100)   // Max temp readout
 #define UI_COLOR_GREEN            lv_color_hex(0x00E676)   // FPS readout
+#define UI_COLOR_RED              lv_color_hex(0xFF1744)   // Active streaming indicator red
 
 // Shared UI Styles
 extern lv_style_t style_screen;
@@ -81,11 +82,20 @@ extern lv_obj_t* screen_scaling;
 extern lv_obj_t* screen_error;
 
 // Screen item counts
-constexpr int MAIN_MENU_COUNT = 4;
-constexpr int SETTINGS_COUNT = 8;
-constexpr int SCALING_OPTIONS_COUNT = 6;
+constexpr int MAIN_MENU_COUNT = 5;
+constexpr int SETTINGS_COUNT = 10;
+constexpr int SCALING_OPTIONS_COUNT = 7;
+
+// Bluetooth Icon Font & Symbol
+#define UI_SYMBOL_BLUETOOTH "\xEE\x80\x80"
+extern const lv_font_t ui_font_bluetooth;
+
+// Antialiased Circle Icon Font & Symbol (13x13 matching Montserrat 14 play/stop)
+#define UI_SYMBOL_CIRCLE    "\xEE\x80\x81"
+extern const lv_font_t ui_font_circle;
 
 // Shared Screen Widgets
+extern lv_obj_t* main_menu_list;
 extern lv_obj_t* mainMenuBtns[MAIN_MENU_COUNT];
 extern lv_obj_t* mainMenuArrows[MAIN_MENU_COUNT];
 
@@ -134,6 +144,7 @@ void buildSettingsScreen();
 void buildBrightnessScreen();
 void buildScalingScreen();
 void buildErrorScreen();
+void refreshMainMenuBLEState(bool resetFocus = false);
 
 // Screen Telemetry & Value Updaters
 void updateBootScreenUI(const char* statusText, uint8_t progressPercent);
@@ -188,16 +199,22 @@ PaletteType getPaletteSetting();
 bool getMirrorSetting();
 ScalingMode getScalingModeSetting();
 uint8_t getDisplayBrightnessSetting();
+uint8_t getDisplayRotationSetting();
 uint32_t getI2CSpeedSetting();
 bool getRgbLedEnabledSetting();
+bool getLiveDenoiseSetting();
+bool getBLEEnabledSetting();
 
 void setTempUnitSetting(TempUnit unit);
 void setPaletteSetting(PaletteType pal);
 void setMirrorSetting(bool mirror);
 void setScalingModeSetting(ScalingMode mode);
 void setDisplayBrightnessSetting(uint8_t percent);
+void setDisplayRotationSetting(uint8_t rot);
 void setI2CSpeedSetting(uint32_t speedHz);
 void setRgbLedEnabledSetting(bool enabled);
+void setLiveDenoiseSetting(bool enabled);
+void setBLEEnabledSetting(bool enabled);
 
 // Shared Temperature Conversion Helpers
 float convertTemp(float tempC, TempUnit unit);

@@ -45,6 +45,7 @@
 #define PIN_WHEEL_SW      6   // Push Button Switch (Pin 6 on J1)
 
 // LiPo Battery Monitoring (100k / 100k Voltage Divider on GPIO 8)
+// Pure software charge & discharge state estimation (no extra hardware pins needed)
 #define PIN_BATTERY_ADC        8      // ADC1 Channel 7
 #define BATTERY_DIVIDER_RATIO  2.0f   // (R1 + R2) / R2 = (100k + 100k) / 100k = 2.0
 
@@ -129,7 +130,7 @@
 
 #define DISPLAY_TASK_CORE    1
 #define DISPLAY_TASK_PRIO    2
-#define DISPLAY_TASK_STACK   12288
+#define DISPLAY_TASK_STACK   8192
 
 #define LED_TASK_CORE        0
 #define LED_TASK_PRIO        1

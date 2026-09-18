@@ -149,6 +149,11 @@ class TAAUUpscaler:
         dx = np.clip(shift[0], -3.0, 3.0)
         dy = np.clip(shift[1], -3.0, 3.0)
 
+        # Camera-pan attenuation with deadband: micro-jitter (<=0.50) retains full alpha
+        motion_dist = np.sqrt(dx * dx + dy * dy)
+        pan_factor = 1.0 if motion_dist <= 0.50 else np.clip(1.0 - (motion_dist - 0.50) * 0.67, 0.0, 1.0)
+        base_alpha = self.alpha * pan_factor
+
         # 2. History Reprojection (Warping by motion vector)
         scale_x = self.target_w / w
         scale_y = self.target_h / h
@@ -162,10 +167,15 @@ class TAAUUpscaler:
         low_max = cv2.dilate(cur_low, kernel)
         high_min = cv2.resize(low_min, (self.target_w, self.target_h), interpolation=cv2.INTER_LINEAR)
         high_max = cv2.resize(low_max, (self.target_w, self.target_h), interpolation=cv2.INTER_LINEAR)
-        clamped_history = np.clip(warped_history, high_min - 0.2, high_max + 0.2)
+        clamped_history = np.clip(warped_history, high_min - 0.15, high_max + 0.15)
 
-        # 4. Temporal Sample Accumulation
-        accumulated = (1.0 - self.alpha) * cur_high + self.alpha * clamped_history
+        # 4. Temporal Sample Accumulation with Disocclusion Rejection
+        # Disocclusion deadband: sensor noise (<1.00°C) retains full 100% temporal accumulation.
+        # Rapid moving edges (delta >= 1.00°C to 3.00°C) drop alpha to 0 to eliminate ghosts.
+        diff = np.abs(cur_high - clamped_history)
+        disocclusion_weight = np.clip(1.0 - (diff - 1.00) * 0.50, 0.0, 1.0)
+        eff_alpha = base_alpha * disocclusion_weight
+        accumulated = (1.0 - eff_alpha) * cur_high + eff_alpha * clamped_history
 
         # 5. Contrast Adaptive Edge-Preserving Sharpening Pass
         smooth = cv2.bilateralFilter(accumulated, d=5, sigmaColor=1.5, sigmaSpace=5.0)

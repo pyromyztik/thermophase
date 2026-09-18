@@ -147,6 +147,14 @@ void ThermalScaler::renderTAAU(
     int shiftX = (int)roundf(dxHigh);
     int shiftY = (int)roundf(dyHigh);
 
+    // Camera-pan attenuation:
+    // Deadband: Sensor micro-jitter and hand tremor (<= 0.50 sensor pixels) retains 100% alpha.
+    // Rapid camera sweeps (> 0.50 sensor pixels) smoothly fade alpha to 0 so fast pans fall back cleanly to Bicubic.
+    float motionDist = sqrtf(dx * dx + dy * dy);
+    float panFactor = (motionDist <= 0.50f) ? 1.0f : (1.0f - (motionDist - 0.50f) * 0.67f);
+    if (panFactor < 0.0f) panFactor = 0.0f;
+    float baseAlpha = alpha * panFactor;
+
     // 2. Anti-Ghosting Bounding Box on low-res grid
     computeNeighborhoodMinMax(cleanGrid, m_gridW, m_gridH, m_lowMin, m_lowMax);
 
@@ -258,13 +266,23 @@ void ThermalScaler::renderTAAU(
 
             float hVal = histRow[srcX];
 
-            float highMin = omfy * m_interMin0[x] + fy * m_interMin1[x] - 0.3f;
-            float highMax = omfy * m_interMax0[x] + fy * m_interMax1[x] + 0.3f;
+            float highMin = omfy * m_interMin0[x] + fy * m_interMin1[x] - 0.15f;
+            float highMax = omfy * m_interMax0[x] + fy * m_interMax1[x] + 0.15f;
 
             if (hVal < highMin) hVal = highMin;
             else if (hVal > highMax) hVal = highMax;
 
-            float accum = (1.0f - alpha) * curHigh + alpha * hVal;
+            // Dynamic Disocclusion / Temporal Difference Rejection (Anti-Ghosting Engine)
+            // Sensor noise floor stays well under 1.00°C -> retains 100% full temporal accumulation.
+            // Rapid motion / moving edges (delta >= 1.00°C to 3.00°C) smoothly drop history weight to 0,
+            // purging ghost trails in 1 frame without degrading static super-resolution clarity.
+            float diff = fabsf(curHigh - hVal);
+            float disocclusionWeight = 1.0f - (diff - 1.00f) * 0.50f;
+            if (disocclusionWeight < 0.0f) disocclusionWeight = 0.0f;
+            else if (disocclusionWeight > 1.0f) disocclusionWeight = 1.0f;
+
+            float effAlpha = baseAlpha * disocclusionWeight;
+            float accum = (1.0f - effAlpha) * curHigh + effAlpha * hVal;
 
             outHistRow[x] = accum;
             curLine[x] = accum;

@@ -1,6 +1,7 @@
 #include "sensor.hpp"
 #include "diagnostics.hpp"
 #include "ppt.hpp"
+#include "ble.hpp"
 #include <esp_timer.h>
 #include <algorithm>
 #include <cmath>
@@ -234,6 +235,50 @@ void filterSnapshotFrame(const float* src, float* dst) {
     }
 }
 
+static bool globalLiveDenoiseEnabled = true;
+
+void setLiveDenoiseEnabled(bool enabled) {
+    globalLiveDenoiseEnabled = enabled;
+}
+
+bool getLiveDenoiseEnabled() {
+    return globalLiveDenoiseEnabled;
+}
+
+// 3x3 Peak-Preserving Edge-Preserving Median Filter
+// For normal pixels, applies the exact 3x3 median (eliminating high-frequency noise and checkerboard dither).
+// When a genuine isolated thermal hotspot (e.g. tiny SMD resistor or pinpoint heat source) exceeds the local
+// median by more than peakThreshold, the true peak temperature is preserved instead of being treated as noise.
+void filterPeakPreservingMedian(const float* src, float* dst, float peakThreshold) {
+    float window[9];
+    for (int r = 0; r < SENSOR_HEIGHT; ++r) {
+        for (int c = 0; c < SENSOR_WIDTH; ++c) {
+            int count = 0;
+            float centerVal = src[r * SENSOR_WIDTH + c];
+            for (int dr = -1; dr <= 1; ++dr) {
+                int nr = r + dr;
+                if (nr < 0 || nr >= SENSOR_HEIGHT) continue;
+                for (int dc = -1; dc <= 1; ++dc) {
+                    int nc = c + dc;
+                    if (nc < 0 || nc >= SENSOR_WIDTH) continue;
+                    window[count++] = src[nr * SENSOR_WIDTH + nc];
+                }
+            }
+            std::nth_element(window, window + count / 2, window + count);
+            float medianVal = window[count / 2];
+
+            float diff = centerVal - medianVal;
+            if (diff > peakThreshold) {
+                // True isolated thermal hotspot: preserve the real peak temperature
+                dst[r * SENSOR_WIDTH + c] = centerVal;
+            } else {
+                // Sensor noise / checkerboard dither / uniform area: exact 3x3 median
+                dst[r * SENSOR_WIDTH + c] = medianVal;
+            }
+        }
+    }
+}
+
 void thermalSensorTask(void *pvParameters) {
     Serial.println("[TASK] Thermal Sensor Task started on Core " + String(xPortGetCoreID()));
 
@@ -386,6 +431,13 @@ void thermalSensorTask(void *pvParameters) {
 
             postThermalFrame(localFrame);
 
+            // Stream over BLE if streaming is active and BLE is connected
+            if (isBLEStreaming() && isBLEConnected()) {
+                streamThermalFrameBLE(localFrame.temperatures, SENSOR_PIXELS,
+                                      localFrame.minTemp, localFrame.maxTemp,
+                                      localFrame.frameIndex);
+            }
+
             // Feed into PPT engine if armed or acquiring
             if (isPPTArmed() || isPPTAcquiring()) {
                 pptProcessSensorFrame(localFrame.temperatures);
@@ -398,6 +450,7 @@ void thermalSensorTask(void *pvParameters) {
 
             int64_t sensorEndUs = esp_timer_get_time();
             logSensorProfile(sensorEndUs - sensorStartUs, sensorIntervalUs);
+            vTaskDelay(pdMS_TO_TICKS(2));
         } else {
             consecutiveErrors++;
             Serial.printf("[MLX90640] Warning: getFrame returned error code %d (consecutive: %d)\n",

@@ -12,7 +12,8 @@ const char* scalingOptionDescs[] = {
     "Smooth 2x2 linear interpolation; fast performance",
     "4-tap Catmull-Rom spline; balanced sharpness & clarity",
     "6-tap Lanczos sinc filter; high edge reconstruction",
-    "Temporal AA with motion reprojection & CAS sharpening. This is the heaviest scaling method - may reduce performance.",
+    "Temporal AA with motion reprojection & CAS sharpening. Heavy temporal accumulation provides silky noise reduction and sub-pixel resolution.",
+    "Edge-preserving 3x3 spatial filter. Strips thermal noise & checkerboard dither while preserving pin-sharp boundaries and true thermal hot-spots.",
     "Return to settings menu"
 };
 
@@ -22,6 +23,7 @@ static const char* scalingOptionLabels[] = {
     "Bicubic (Catmull-Rom)",
     "Lanczos-3",
     "TAAU (Temporal AA)",
+    "Live Denoise",
     "Back to Settings"
 };
 
@@ -33,9 +35,16 @@ void updateScalingDesc(int idx) {
     focusedScalingIdx = idx;
     if (scaling_desc_label == nullptr || idx >= SCALING_OPTIONS_COUNT) return;
     ScalingMode current = getScalingModeSetting();
+    bool denoiseOn = getLiveDenoiseSetting();
+
     if (idx < 5 && (ScalingMode)idx == current) {
         char descBuf[256];
         snprintf(descBuf, sizeof(descBuf), "This is the selected option.\n\n%s", scalingOptionDescs[idx]);
+        lv_label_set_text(scaling_desc_label, descBuf);
+    } else if (idx == 5) {
+        char descBuf[256];
+        snprintf(descBuf, sizeof(descBuf), "Live Denoise is currently %s.\n\n%s",
+                 denoiseOn ? "ENABLED" : "DISABLED", scalingOptionDescs[idx]);
         lv_label_set_text(scaling_desc_label, descBuf);
     } else {
         lv_label_set_text(scaling_desc_label, scalingOptionDescs[idx]);
@@ -56,21 +65,25 @@ static void scalingBtnEventCb(lv_event_t* e) {
                 lv_obj_add_flag(scalingArrows[i], LV_OBJ_FLAG_HIDDEN);
             }
         }
-        if (idx == 5) {
-            lv_obj_set_style_text_color(scalingNameLabels[5], lv_color_black(), 0);
-            if (scalingArrows[5] != nullptr) {
-                lv_obj_set_style_text_color(scalingArrows[5], lv_color_black(), 0);
+        if (idx == 6) {
+            lv_obj_set_style_text_color(scalingNameLabels[6], lv_color_black(), 0);
+            if (scalingArrows[6] != nullptr) {
+                lv_obj_set_style_text_color(scalingArrows[6], lv_color_black(), 0);
             }
-        } else if (scalingNameLabels[5] != nullptr) {
-            lv_obj_set_style_text_color(scalingNameLabels[5], UI_COLOR_TEXT_DIM, 0);
+        } else if (scalingNameLabels[6] != nullptr) {
+            lv_obj_set_style_text_color(scalingNameLabels[6], UI_COLOR_TEXT_DIM, 0);
         }
 
         updateScalingDesc(idx);
-        lv_obj_scroll_to_view(btn, LV_ANIM_ON);
+        if (idx == 0) {
+            lv_obj_scroll_to_y(scaling_list, 0, LV_ANIM_ON);
+        } else {
+            lv_obj_scroll_to_view(btn, LV_ANIM_ON);
+        }
 
     } else if (code == LV_EVENT_DEFOCUSED) {
-        if (idx == 5 && scalingNameLabels[5] != nullptr) {
-            lv_obj_set_style_text_color(scalingNameLabels[5], UI_COLOR_TEXT_DIM, 0);
+        if (idx == 6 && scalingNameLabels[6] != nullptr) {
+            lv_obj_set_style_text_color(scalingNameLabels[6], UI_COLOR_TEXT_DIM, 0);
         }
     } else if (code == LV_EVENT_CLICKED) {
         if (idx < 5) {
@@ -92,6 +105,24 @@ static void scalingBtnEventCb(lv_event_t* e) {
                 });
                 lv_anim_start(&a_val);
             }
+        } else if (idx == 5) {
+            // Toggle Live Denoise (Peak-Preserving Median)
+            bool newDenoise = !getLiveDenoiseSetting();
+            setLiveDenoiseSetting(newDenoise);
+            updateScalingValues();
+
+            // Flash badge animation
+            if (scalingCheckmarks[5] != nullptr) {
+                lv_anim_t a_val;
+                lv_anim_init(&a_val);
+                lv_anim_set_var(&a_val, scalingCheckmarks[5]);
+                lv_anim_set_values(&a_val, 40, 255);
+                lv_anim_set_time(&a_val, 150);
+                lv_anim_set_exec_cb(&a_val, [](void* var, int32_t val) {
+                    lv_obj_set_style_text_opa((lv_obj_t*)var, val, 0);
+                });
+                lv_anim_start(&a_val);
+            }
         } else {
             // Back to Settings screen (focused on item 4 "Upscaling")
             uiNavToSettings(4);
@@ -101,6 +132,8 @@ static void scalingBtnEventCb(lv_event_t* e) {
 
 void updateScalingValues() {
     ScalingMode current = getScalingModeSetting();
+    bool denoiseOn = getLiveDenoiseSetting();
+
     for (int i = 0; i < 5; ++i) {
         if (scalingBtns[i] == nullptr || scalingNameLabels[i] == nullptr) continue;
 
@@ -130,6 +163,22 @@ void updateScalingValues() {
             }
         }
     }
+
+    // Live Denoise Button (Index 5)
+    if (scalingBtns[5] != nullptr && scalingNameLabels[5] != nullptr) {
+        lv_obj_set_style_bg_color(scalingBtns[5], UI_COLOR_BG, 0);
+        lv_obj_set_style_bg_opa(scalingBtns[5], LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(scalingBtns[5], UI_COLOR_BORDER, 0);
+        lv_obj_set_style_border_width(scalingBtns[5], 1, 0);
+        lv_obj_set_style_text_color(scalingNameLabels[5], UI_COLOR_TEXT, 0);
+
+        if (scalingCheckmarks[5] != nullptr) {
+            lv_label_set_text(scalingCheckmarks[5], denoiseOn ? "[ON]" : "[OFF]");
+            lv_obj_set_style_text_color(scalingCheckmarks[5], denoiseOn ? lv_color_hex(0x00E5FF) : UI_COLOR_TEXT_DIM, 0);
+            lv_obj_clear_flag(scalingCheckmarks[5], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
     updateScalingDesc(focusedScalingIdx);
 }
 
@@ -177,54 +226,132 @@ void buildScalingScreen() {
 
     int itemH = 26;
     int spacing = 4;
-    for (int i = 0; i < SCALING_OPTIONS_COUNT; ++i) {
+    int curY = 2;
+
+    // Header 1: SCALING MODES
+    lv_obj_t* secHdr1 = lv_label_create(scaling_list);
+    lv_label_set_text(secHdr1, "SCALING MODES");
+    lv_obj_set_pos(secHdr1, 4, curY);
+    lv_obj_set_style_text_color(secHdr1, UI_COLOR_TEXT_DIM, 0);
+    lv_obj_set_style_text_font(secHdr1, &lv_font_montserrat_10, 0);
+    curY += 15;
+
+    // Scaling Modes (0..4)
+    for (int i = 0; i < 5; ++i) {
         scalingBtns[i] = lv_btn_create(scaling_list);
-        lv_obj_set_pos(scalingBtns[i], 2, i * (itemH + spacing));
+        lv_obj_set_pos(scalingBtns[i], 2, curY);
         lv_obj_set_size(scalingBtns[i], 198, itemH);
         lv_obj_add_style(scalingBtns[i], &style_btn_default, 0);
-        if (i == 5) {
-            lv_obj_add_style(scalingBtns[i], &style_btn_back_focused, LV_STATE_FOCUSED);
-            lv_obj_add_style(scalingBtns[i], &style_btn_back_focused, LV_STATE_FOCUS_KEY);
-        } else {
-            lv_obj_add_style(scalingBtns[i], &style_btn_focused, LV_STATE_FOCUSED);
-            lv_obj_add_style(scalingBtns[i], &style_btn_focused, LV_STATE_FOCUS_KEY);
-        }
+        lv_obj_add_style(scalingBtns[i], &style_btn_focused, LV_STATE_FOCUSED);
+        lv_obj_add_style(scalingBtns[i], &style_btn_focused, LV_STATE_FOCUS_KEY);
         lv_obj_add_style(scalingBtns[i], &style_btn_pressed, LV_STATE_PRESSED);
 
-        // Arrow
         scalingArrows[i] = lv_label_create(scalingBtns[i]);
-        if (i == 5) {
-            lv_label_set_text(scalingArrows[i], LV_SYMBOL_LEFT);
-            lv_obj_set_style_text_color(scalingArrows[i], lv_color_black(), 0);
-        } else {
-            lv_label_set_text(scalingArrows[i], LV_SYMBOL_RIGHT);
-            lv_obj_set_style_text_color(scalingArrows[i], UI_COLOR_ACCENT, 0);
-        }
+        lv_label_set_text(scalingArrows[i], LV_SYMBOL_RIGHT);
+        lv_obj_set_style_text_color(scalingArrows[i], UI_COLOR_ACCENT, 0);
         lv_obj_set_style_text_font(scalingArrows[i], &lv_font_montserrat_12, 0);
         lv_obj_align(scalingArrows[i], LV_ALIGN_LEFT_MID, 0, 0);
         if (i != 0) lv_obj_add_flag(scalingArrows[i], LV_OBJ_FLAG_HIDDEN);
 
-        // Name
         scalingNameLabels[i] = lv_label_create(scalingBtns[i]);
         lv_label_set_text(scalingNameLabels[i], scalingOptionLabels[i]);
         lv_obj_align(scalingNameLabels[i], LV_ALIGN_LEFT_MID, 13, 0);
         lv_obj_set_style_text_font(scalingNameLabels[i], &lv_font_montserrat_12, 0);
-        lv_obj_set_style_text_color(scalingNameLabels[i], (i == 5) ? UI_COLOR_TEXT_DIM : UI_COLOR_TEXT, 0);
+        lv_obj_set_style_text_color(scalingNameLabels[i], UI_COLOR_TEXT, 0);
 
-        // Green Checkmark indicator (Right inside edge of button)
-        if (i < 5) {
-            scalingCheckmarks[i] = lv_label_create(scalingBtns[i]);
-            lv_obj_align(scalingCheckmarks[i], LV_ALIGN_RIGHT_MID, -8, 0);
-            lv_obj_set_style_text_color(scalingCheckmarks[i], lv_color_hex(0x008C00), 0);
-            lv_obj_set_style_text_font(scalingCheckmarks[i], &lv_font_montserrat_12, 0);
-            lv_label_set_text(scalingCheckmarks[i], "");
-            lv_obj_add_flag(scalingCheckmarks[i], LV_OBJ_FLAG_HIDDEN);
-        } else {
-            scalingCheckmarks[i] = nullptr;
-        }
+        scalingCheckmarks[i] = lv_label_create(scalingBtns[i]);
+        lv_obj_align(scalingCheckmarks[i], LV_ALIGN_RIGHT_MID, -8, 0);
+        lv_obj_set_style_text_color(scalingCheckmarks[i], lv_color_hex(0x008C00), 0);
+        lv_obj_set_style_text_font(scalingCheckmarks[i], &lv_font_montserrat_12, 0);
+        lv_label_set_text(scalingCheckmarks[i], "");
+        lv_obj_add_flag(scalingCheckmarks[i], LV_OBJ_FLAG_HIDDEN);
 
         lv_obj_add_event_cb(scalingBtns[i], scalingBtnEventCb, LV_EVENT_ALL, (void*)(intptr_t)i);
+        curY += itemH + spacing;
     }
+
+    // Divider Line separating scaling modes from live denoise
+    curY += 8;
+    static lv_point_t sep1_pts[] = {{4, 0}, {196, 0}};
+    lv_obj_t* sep1 = lv_line_create(scaling_list);
+    lv_line_set_points(sep1, sep1_pts, 2);
+    lv_obj_add_style(sep1, &style_divider, 0);
+    lv_obj_set_pos(sep1, 0, curY);
+    curY += 12;
+
+    // Header 2: LIVE FILTERING
+    lv_obj_t* secHdr2 = lv_label_create(scaling_list);
+    lv_label_set_text(secHdr2, "LIVE FILTERING");
+    lv_obj_set_pos(secHdr2, 4, curY);
+    lv_obj_set_style_text_color(secHdr2, UI_COLOR_TEXT_DIM, 0);
+    lv_obj_set_style_text_font(secHdr2, &lv_font_montserrat_10, 0);
+    curY += 16;
+
+    // Button 5: Live Denoise (Toggle)
+    scalingBtns[5] = lv_btn_create(scaling_list);
+    lv_obj_set_pos(scalingBtns[5], 2, curY);
+    lv_obj_set_size(scalingBtns[5], 198, itemH);
+    lv_obj_add_style(scalingBtns[5], &style_btn_default, 0);
+    lv_obj_add_style(scalingBtns[5], &style_btn_focused, LV_STATE_FOCUSED);
+    lv_obj_add_style(scalingBtns[5], &style_btn_focused, LV_STATE_FOCUS_KEY);
+    lv_obj_add_style(scalingBtns[5], &style_btn_pressed, LV_STATE_PRESSED);
+
+    scalingArrows[5] = lv_label_create(scalingBtns[5]);
+    lv_label_set_text(scalingArrows[5], LV_SYMBOL_RIGHT);
+    lv_obj_set_style_text_color(scalingArrows[5], UI_COLOR_ACCENT, 0);
+    lv_obj_set_style_text_font(scalingArrows[5], &lv_font_montserrat_12, 0);
+    lv_obj_align(scalingArrows[5], LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_add_flag(scalingArrows[5], LV_OBJ_FLAG_HIDDEN);
+
+    scalingNameLabels[5] = lv_label_create(scalingBtns[5]);
+    lv_label_set_text(scalingNameLabels[5], scalingOptionLabels[5]);
+    lv_obj_align(scalingNameLabels[5], LV_ALIGN_LEFT_MID, 13, 0);
+    lv_obj_set_style_text_font(scalingNameLabels[5], &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(scalingNameLabels[5], UI_COLOR_TEXT, 0);
+
+    scalingCheckmarks[5] = lv_label_create(scalingBtns[5]);
+    lv_obj_align(scalingCheckmarks[5], LV_ALIGN_RIGHT_MID, -8, 0);
+    lv_obj_set_style_text_font(scalingCheckmarks[5], &lv_font_montserrat_12, 0);
+    lv_label_set_text(scalingCheckmarks[5], "[ON]");
+    lv_obj_set_style_text_color(scalingCheckmarks[5], lv_color_hex(0x00E5FF), 0);
+
+    lv_obj_add_event_cb(scalingBtns[5], scalingBtnEventCb, LV_EVENT_ALL, (void*)(intptr_t)5);
+    curY += itemH + spacing;
+
+    // Divider Line before Back button
+    curY += 8;
+    static lv_point_t sep2_pts[] = {{4, 0}, {196, 0}};
+    lv_obj_t* sep2 = lv_line_create(scaling_list);
+    lv_line_set_points(sep2, sep2_pts, 2);
+    lv_obj_add_style(sep2, &style_divider, 0);
+    lv_obj_set_pos(sep2, 0, curY);
+    curY += 12;
+
+    // Button 6: Back to Settings
+    scalingBtns[6] = lv_btn_create(scaling_list);
+    lv_obj_set_pos(scalingBtns[6], 2, curY);
+    lv_obj_set_size(scalingBtns[6], 198, itemH);
+    lv_obj_add_style(scalingBtns[6], &style_btn_default, 0);
+    lv_obj_add_style(scalingBtns[6], &style_btn_back_focused, LV_STATE_FOCUSED);
+    lv_obj_add_style(scalingBtns[6], &style_btn_back_focused, LV_STATE_FOCUS_KEY);
+    lv_obj_add_style(scalingBtns[6], &style_btn_pressed, LV_STATE_PRESSED);
+
+    scalingArrows[6] = lv_label_create(scalingBtns[6]);
+    lv_label_set_text(scalingArrows[6], LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_color(scalingArrows[6], lv_color_black(), 0);
+    lv_obj_set_style_text_font(scalingArrows[6], &lv_font_montserrat_12, 0);
+    lv_obj_align(scalingArrows[6], LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_add_flag(scalingArrows[6], LV_OBJ_FLAG_HIDDEN);
+
+    scalingNameLabels[6] = lv_label_create(scalingBtns[6]);
+    lv_label_set_text(scalingNameLabels[6], scalingOptionLabels[6]);
+    lv_obj_align(scalingNameLabels[6], LV_ALIGN_LEFT_MID, 13, 0);
+    lv_obj_set_style_text_font(scalingNameLabels[6], &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(scalingNameLabels[6], UI_COLOR_TEXT_DIM, 0);
+
+    scalingCheckmarks[6] = nullptr;
+    lv_obj_add_event_cb(scalingBtns[6], scalingBtnEventCb, LV_EVENT_ALL, (void*)(intptr_t)6);
+
     updateScalingValues();
 
     // Right-Side Contextual Description Panel

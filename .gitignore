@@ -3,4 +3,4 @@
 __pycache__/
 *.pyc
 
-fix_scons.py
+test-scripts/

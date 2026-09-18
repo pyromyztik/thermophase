@@ -1,6 +1,7 @@
 #include "ui.hpp"
 #include "display.hpp"
 #include "storage.hpp"
+#include "ble.hpp"
 
 // Settings Shared Variables
 lv_obj_t* settingsBtns[SETTINGS_COUNT];
@@ -8,25 +9,29 @@ lv_obj_t* settingsArrows[SETTINGS_COUNT];
 lv_obj_t* settings_desc_label = nullptr;
 lv_obj_t* settings_list = nullptr;
 
-const char* settingsDescriptions[] = {
+const char* settingsDescriptions[SETTINGS_COUNT] = {
     "Adjust display backlight brightness",
-    "Select temperature unit (" UI_SYMBOL_DEGREE "C, " UI_SYMBOL_DEGREE "F, K)",
-    "Select false-color palette for thermal gradients",
+    "Rotate display 180" UI_SYMBOL_DEGREE " upside down for alternative mounting",
     "Horizontally flip thermal video stream",
-    "Open upscaler menu to configure interpolation modes",
+    "Select false-color palette for thermal gradients",
+    "Open upscaler menu to configure interpolation modes and live filtering",
+    "Select temperature unit (" UI_SYMBOL_DEGREE "C, " UI_SYMBOL_DEGREE "F, K)",
     "Select Thermal Sensor's I2C clock: 400 kHz (clean & stable - runs at 8fps) or 800 kHz (little more noisy, but runs at 14-15fps)",
     "Enable or disable the on-board WS2812 RGB target / status indicator LED",
+    "Enable or disable Bluetooth wireless telemetry & remote command streaming",
     "Save all settings and return to main menu."
 };
 
-static const char* settingsLabels[] = {
+static const char* settingsLabels[SETTINGS_COUNT] = {
     "Brightness",
-    "Temp Unit",
-    "Color Palette",
+    "Orientation",
     "Mirror Feed",
+    "Color Palette",
     "Upscaling",
+    "Temp Unit",
     "I2C Clock",
     "RGB LED",
+    "Bluetooth",
     "Back to Main Menu"
 };
 
@@ -46,7 +51,7 @@ static void settingsBtnEventCb(lv_event_t* e) {
                 lv_obj_add_flag(settingsArrows[i], LV_OBJ_FLAG_HIDDEN);
             }
         }
-        // When the back option (last item) is selected, its text and arrow become black on red fill
+        // When the back option (last item) is selected, its text and arrow become black on focus
         if (idx == SETTINGS_COUNT - 1) {
             lv_obj_set_style_text_color(settingsNameLabels[SETTINGS_COUNT - 1], lv_color_black(), 0);
             if (settingsArrows[SETTINGS_COUNT - 1] != nullptr) {
@@ -56,13 +61,30 @@ static void settingsBtnEventCb(lv_event_t* e) {
             lv_obj_set_style_text_color(settingsNameLabels[SETTINGS_COUNT - 1], UI_COLOR_TEXT_DIM, 0);
         }
 
-        // Update 1-line description
+        // Update 1-line description (dynamic info for Bluetooth)
         if (settings_desc_label != nullptr && idx < SETTINGS_COUNT) {
-            lv_label_set_text(settings_desc_label, settingsDescriptions[idx]);
+            if (idx == 8) {
+                char bleDesc[140];
+                if (!getBLEEnabledSetting()) {
+                    snprintf(bleDesc, sizeof(bleDesc), "Bluetooth is OFF (saves ~35-45 mA / ~12%% battery). Click to enable wireless telemetry.");
+                } else if (isBLEConnected()) {
+                    const char* client = getBLEConnectedClientInfo();
+                    snprintf(bleDesc, sizeof(bleDesc), "Connected to: %s. Streaming live battery & thermal telemetry.", (client && client[0]) ? client : "Device");
+                } else {
+                    snprintf(bleDesc, sizeof(bleDesc), "Bluetooth ON: Advertising as 'thermophase'. Streams live telemetry to Web Terminal.");
+                }
+                lv_label_set_text(settings_desc_label, bleDesc);
+            } else {
+                lv_label_set_text(settings_desc_label, settingsDescriptions[idx]);
+            }
         }
 
         // Ensure focused item is smoothly scrolled into view
-        lv_obj_scroll_to_view(btn, LV_ANIM_ON);
+        if (idx == 0) {
+            lv_obj_scroll_to_y(settings_list, 0, LV_ANIM_ON);
+        } else {
+            lv_obj_scroll_to_view(btn, LV_ANIM_ON);
+        }
 
     } else if (code == LV_EVENT_DEFOCUSED) {
         if (idx == SETTINGS_COUNT - 1 && settingsNameLabels[SETTINGS_COUNT - 1] != nullptr) {
@@ -73,39 +95,58 @@ static void settingsBtnEventCb(lv_event_t* e) {
             case 0: // Brightness: Open dedicated slider subpage
                 uiNavToBrightness();
                 return;
-            case 1: { // Temp Unit: Celsius -> Fahrenheit -> Kelvin -> Celsius
-                TempUnit nextUnit = (TempUnit)((getTempUnitSetting() + 1) % 3);
-                setTempUnitSetting(nextUnit);
-                updateTempUnit(nextUnit);
+            case 1: { // Orientation: Normal <-> 180 deg
+                uint8_t nextRot = (getDisplayRotationSetting() == 1) ? 0 : 1;
+                setDisplayRotationSetting(nextRot);
                 break;
             }
-            case 2: { // Color Palette: Ironbow -> White-Hot -> Rainbow
-                PaletteType nextPal = (PaletteType)((getPaletteSetting() + 1) % 3);
-                setPaletteSetting(nextPal);
-                updatePalette(nextPal);
-                break;
-            }
-            case 3: { // Mirror Feed: OFF <-> ON
+            case 2: { // Mirror Feed: OFF <-> ON
                 bool nextMirror = !getMirrorSetting();
                 setMirrorSetting(nextMirror);
                 updateMirror(nextMirror);
                 break;
             }
+            case 3: { // Color Palette: Ironbow -> White-Hot -> Rainbow
+                PaletteType nextPal = (PaletteType)((getPaletteSetting() + 1) % 3);
+                setPaletteSetting(nextPal);
+                updatePalette(nextPal);
+                break;
+            }
             case 4: // Upscaling: Open dedicated subpage
                 uiNavToScalingMenu();
                 return;
-            case 5: { // I2C Clock: 400 kHz <-> 800 kHz
+            case 5: { // Temp Unit: Celsius -> Fahrenheit -> Kelvin -> Celsius
+                TempUnit nextUnit = (TempUnit)((getTempUnitSetting() + 1) % 3);
+                setTempUnitSetting(nextUnit);
+                updateTempUnit(nextUnit);
+                break;
+            }
+            case 6: { // I2C Clock: 400 kHz <-> 800 kHz
                 uint32_t currentSpeed = getI2CSpeedSetting();
                 uint32_t nextSpeed = (currentSpeed == I2C_SPEED_800K) ? I2C_SPEED_400K : I2C_SPEED_800K;
                 setI2CSpeedSetting(nextSpeed);
                 break;
             }
-            case 6: { // RGB LED: OFF <-> ON
+            case 7: { // RGB LED: OFF <-> ON
                 bool nextRgb = !getRgbLedEnabledSetting();
                 setRgbLedEnabledSetting(nextRgb);
                 break;
             }
-            case 7: // Back to Main Menu
+            case 8: { // Bluetooth: OFF <-> ON
+                bool nextBle = !getBLEEnabledSetting();
+                setBLEEnabledSetting(nextBle);
+                if (settings_desc_label != nullptr) {
+                    char bleDesc[140];
+                    if (!nextBle) {
+                        snprintf(bleDesc, sizeof(bleDesc), "Bluetooth is OFF (saves ~35-45 mA / ~12%% battery). Click to enable wireless telemetry.");
+                    } else {
+                        snprintf(bleDesc, sizeof(bleDesc), "Bluetooth ON: Advertising as 'thermophase'. Streams live telemetry to Web Terminal.");
+                    }
+                    lv_label_set_text(settings_desc_label, bleDesc);
+                }
+                break;
+            }
+            case 9: // Back to Main Menu
                 saveSettingsIfDirty();
                 uiNavToMainMenu();
                 return;
@@ -133,21 +174,40 @@ void updateSettingsValues() {
     snprintf(brightBuf, sizeof(brightBuf), "%d%%", getDisplayBrightnessSetting());
     if (settingsValLabels[0]) lv_label_set_text(settingsValLabels[0], brightBuf);
 
-    const char* unitStrs[3] = {"Celsius (" UI_SYMBOL_DEGREE "C)", "Fahrenheit (" UI_SYMBOL_DEGREE "F)", "Kelvin (K)"};
-    const char* palStrs[3] = {"Ironbow", "White-Hot", "Rainbow"};
-    const char* mirStrs[2] = {"OFF", "ON"};
-    const char* scaleStrs[5] = {"Nearest", "Bilinear", "Bicubic", "Lanczos", "TAAU"};
-    const char* onOffStrs[2] = {"OFF", "ON"};
-
-    if (settingsValLabels[1]) lv_label_set_text(settingsValLabels[1], unitStrs[getTempUnitSetting() % 3]);
-    if (settingsValLabels[2]) lv_label_set_text(settingsValLabels[2], palStrs[getPaletteSetting() % 3]);
-    if (settingsValLabels[3]) lv_label_set_text(settingsValLabels[3], mirStrs[getMirrorSetting() ? 1 : 0]);
-    if (settingsValLabels[4]) lv_label_set_text(settingsValLabels[4], scaleStrs[getScalingModeSetting() % 5]);
-    if (settingsValLabels[5]) {
-        lv_label_set_text(settingsValLabels[5], (getI2CSpeedSetting() == I2C_SPEED_800K) ? "800 kHz" : "400 kHz");
+    if (settingsValLabels[1]) {
+        lv_label_set_text(settingsValLabels[1], (getDisplayRotationSetting() == 1) ? "180" UI_SYMBOL_DEGREE : "0" UI_SYMBOL_DEGREE);
     }
+
+    const char* mirStrs[2] = {"OFF", "ON"};
+    if (settingsValLabels[2]) lv_label_set_text(settingsValLabels[2], mirStrs[getMirrorSetting() ? 1 : 0]);
+
+    const char* palStrs[3] = {"Ironbow", "White-Hot", "Rainbow"};
+    if (settingsValLabels[3]) lv_label_set_text(settingsValLabels[3], palStrs[getPaletteSetting() % 3]);
+
+    const char* scaleStrs[5] = {"Nearest", "Bilinear", "Bicubic", "Lanczos", "TAAU"};
+    if (settingsValLabels[4]) lv_label_set_text(settingsValLabels[4], scaleStrs[getScalingModeSetting() % 5]);
+
+    const char* unitStrs[3] = {"Celsius (" UI_SYMBOL_DEGREE "C)", "Fahrenheit (" UI_SYMBOL_DEGREE "F)", "Kelvin (K)"};
+    if (settingsValLabels[5]) lv_label_set_text(settingsValLabels[5], unitStrs[getTempUnitSetting() % 3]);
+
     if (settingsValLabels[6]) {
-        lv_label_set_text(settingsValLabels[6], onOffStrs[getRgbLedEnabledSetting() ? 1 : 0]);
+        lv_label_set_text(settingsValLabels[6], (getI2CSpeedSetting() == I2C_SPEED_800K) ? "800 kHz" : "400 kHz");
+    }
+
+    const char* onOffStrs[2] = {"OFF", "ON"};
+    if (settingsValLabels[7]) {
+        lv_label_set_text(settingsValLabels[7], onOffStrs[getRgbLedEnabledSetting() ? 1 : 0]);
+    }
+
+    if (settingsValLabels[8]) {
+        if (!getBLEEnabledSetting()) {
+            lv_label_set_text(settingsValLabels[8], "OFF");
+        } else if (isBLEConnected()) {
+            lv_label_set_text(settingsValLabels[8], "LINKED");
+        } else {
+            lv_label_set_text(settingsValLabels[8], "ON");
+        }
+        lv_obj_set_style_text_color(settingsValLabels[8], UI_COLOR_ACCENT, 0);
     }
 }
 
@@ -195,9 +255,29 @@ void buildSettingsScreen() {
 
     int itemH = 26;
     int spacing = 4;
-    for (int i = 0; i < SETTINGS_COUNT; ++i) {
+    int curY = 2;
+
+    auto addSectionHeader = [&](const char* title) {
+        lv_obj_t* secHdr = lv_label_create(settings_list);
+        lv_label_set_text(secHdr, title);
+        lv_obj_set_pos(secHdr, 4, curY);
+        lv_obj_set_style_text_color(secHdr, UI_COLOR_TEXT_DIM, 0);
+        lv_obj_set_style_text_font(secHdr, &lv_font_montserrat_10, 0);
+        curY += 16;
+    };
+
+    auto addDivider = [&](lv_point_t* pts) {
+        curY += 8;
+        lv_obj_t* sep = lv_line_create(settings_list);
+        lv_line_set_points(sep, pts, 2);
+        lv_obj_add_style(sep, &style_divider, 0);
+        lv_obj_set_pos(sep, 0, curY);
+        curY += 12;
+    };
+
+    auto createSettingBtn = [&](int i) {
         settingsBtns[i] = lv_btn_create(settings_list);
-        lv_obj_set_pos(settingsBtns[i], 2, i * (itemH + spacing));
+        lv_obj_set_pos(settingsBtns[i], 2, curY);
         lv_obj_set_size(settingsBtns[i], 198, itemH);
         lv_obj_add_style(settingsBtns[i], &style_btn_default, 0);
         if (i == SETTINGS_COUNT - 1) {
@@ -239,9 +319,44 @@ void buildSettingsScreen() {
         } else {
             settingsValLabels[i] = nullptr;
         }
-
         lv_obj_add_event_cb(settingsBtns[i], settingsBtnEventCb, LV_EVENT_ALL, (void*)(intptr_t)i);
-    }
+        curY += itemH + spacing;
+    };
+
+    static lv_point_t sep1_pts[] = {{4, 0}, {196, 0}};
+    static lv_point_t sep2_pts[] = {{4, 0}, {196, 0}};
+    static lv_point_t sep3_pts[] = {{4, 0}, {196, 0}};
+
+    // Section 1: DISPLAY & VIEW
+    addSectionHeader("DISPLAY & VIEW");
+    createSettingBtn(0); // Brightness
+    createSettingBtn(1); // Orientation
+    createSettingBtn(2); // Mirror Feed
+    createSettingBtn(3); // Color Palette
+
+    // Divider 1
+    addDivider(sep1_pts);
+
+    // Section 2: THERMAL PROCESSING
+    addSectionHeader("THERMAL PROCESSING");
+    createSettingBtn(4); // Upscaling
+    createSettingBtn(5); // Temp Unit
+
+    // Divider 2
+    addDivider(sep2_pts);
+
+    // Section 3: HARDWARE & SYSTEM
+    addSectionHeader("HARDWARE & SYSTEM");
+    createSettingBtn(6); // I2C Clock
+    createSettingBtn(7); // RGB LED
+    createSettingBtn(8); // Bluetooth
+
+    // Divider 3
+    addDivider(sep3_pts);
+
+    // Section 4: Exit Option
+    createSettingBtn(9); // Back to Main Menu
+
     updateSettingsValues();
 
     // Right-Side Contextual Description Panel
