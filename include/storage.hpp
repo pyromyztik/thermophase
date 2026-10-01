@@ -9,6 +9,10 @@ void loadSettings();
 // Automatically resets the dirty flag upon successful write.
 void saveSettingsIfDirty();
 
+// Restores all settings back to factory defaults, clears NVS partition,
+// and immediately reapplies defaults across Display, Sensor, UI, and BLE subsystems.
+void resetSettingsToDefaults();
+
 // Marks that a setting has been modified in RAM.
 void markSettingsDirty();
 

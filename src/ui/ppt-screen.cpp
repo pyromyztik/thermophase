@@ -287,6 +287,10 @@ void buildPPTScreen() {
     lv_obj_set_style_text_font(ppt_lbl_f3_val, &lv_font_montserrat_10, 0);
     lv_obj_align(ppt_lbl_f3_val, LV_ALIGN_TOP_LEFT, 4, 136);
 
+    // Bottom-left Battery & Bluetooth Indicator:
+    // Left-aligned at x=4 (matching side telemetry), snapped near bottom, ordered: Battery then Bluetooth icon
+    createBatteryIndicator(ppt_left_panel, true, LV_ALIGN_BOTTOM_LEFT, 4, -6, true);
+
     // 7. Side Telemetry Panel: RIGHT (88x216 at x=232)
     ppt_right_panel = lv_obj_create(screen_ppt);
     lv_obj_set_pos(ppt_right_panel, 232, 0);
@@ -299,9 +303,6 @@ void buildPPTScreen() {
     lv_obj_set_style_pad_all(ppt_right_panel, 6, 0);
     lv_obj_set_style_radius(ppt_right_panel, 0, 0);
     lv_obj_clear_flag(ppt_right_panel, LV_OBJ_FLAG_SCROLLABLE);
-
-    // Top-right Battery Indicator (Icon only - no percentage on PPT screen)
-    createBatteryIndicator(ppt_right_panel, false, LV_ALIGN_TOP_RIGHT, -6, 6);
 
     ppt_lbl_depth_hdr = lv_label_create(ppt_right_panel);
     lv_label_set_text(ppt_lbl_depth_hdr, "STATUS");

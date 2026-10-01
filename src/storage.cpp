@@ -102,3 +102,42 @@ void saveSettingsIfDirty() {
     settingsDirty = false;
     Serial.println("[STORAGE] Settings successfully committed to NVS upon menu exit.");
 }
+
+void resetSettingsToDefaults() {
+    Preferences prefs;
+    if (prefs.begin(NVS_NAMESPACE, false)) { // Read/Write mode
+        prefs.clear();
+        prefs.end();
+        Serial.println("[STORAGE] NVS preferences partition cleared.");
+    }
+
+    // Apply defaults to UI runtime state
+    setDisplayBrightnessSetting(TFT_DEFAULT_BRIGHTNESS);
+    setDisplayRotationSetting(DISPLAY_ROTATION);
+    setTempUnitSetting(TEMP_UNIT_CELSIUS);
+    setPaletteSetting(PALETTE_IRONBOW);
+    setMirrorSetting(MIRROR_HORIZONTAL);
+    setScalingModeSetting(SCALING_BICUBIC);
+    setI2CSpeedSetting(I2C_SPEED_800K);
+    setRgbLedEnabledSetting(true);
+    setLiveDenoiseSetting(true);
+    setLiveDenoiseEnabled(true);
+    setBLEEnabledSetting(true);
+
+    // Apply to Display engine
+    setDisplayBrightness(TFT_DEFAULT_BRIGHTNESS);
+    setDisplayRotation(DISPLAY_ROTATION);
+    updateTempUnit(TEMP_UNIT_CELSIUS);
+    updatePalette(PALETTE_IRONBOW);
+    updateMirror(MIRROR_HORIZONTAL);
+    updateScalingMode(SCALING_BICUBIC);
+
+    // Apply to Sensor engine
+    setSensorI2CSpeed(I2C_SPEED_800K);
+
+    // Apply to BLE engine
+    setBLEEnabled(true);
+
+    settingsDirty = false;
+    Serial.println("[STORAGE] All settings restored to factory defaults.");
+}

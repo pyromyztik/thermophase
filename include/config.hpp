@@ -23,11 +23,11 @@
 #define TFT_MOSI          41  // SPI MOSI (SDI on display)
 #define TFT_SCK           40  // SPI Clock (SCK on display)
 #define TFT_MISO          39  // SPI MISO (SDO on display)
-#define TFT_LED           47  // Backlight control (PWM)
-#define TFT_LED_PWM_CHANNEL  0   // LEDC PWM Channel
-#define TFT_LED_PWM_FREQ     5000// 5 kHz eliminates backlight flicker
-#define TFT_LED_PWM_RES      8   // 8-bit resolution (0 - 255)
-#define TFT_DEFAULT_BRIGHTNESS 80 // Default brightness percentage (10% - 100%)
+#define TFT_LED           21  // Backlight control (PWM)
+#define TFT_LED_PWM_CHANNEL  0      // LEDC PWM Channel
+#define TFT_LED_PWM_FREQ     5000   // 5 kHz eliminates backlight flicker
+#define TFT_LED_PWM_RES      8   	// 8-bit resolution (0 - 255)
+#define TFT_DEFAULT_BRIGHTNESS 80 	// Default brightness percentage (10% - 100%)
 
 // MISO / SDO Diagnostic check:
 // - Set to true to detect display presence & disconnection via SPI MISO (GPIO 39) register readback.

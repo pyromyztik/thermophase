@@ -125,6 +125,7 @@ struct BatteryIndicatorEntry {
     lv_obj_t* icon;
     lv_obj_t* pct;
     lv_obj_t* ble;
+    bool bleRight;
 };
 static constexpr size_t MAX_BATTERY_INDICATORS = 8;
 static BatteryIndicatorEntry batteryIndicators[MAX_BATTERY_INDICATORS];
@@ -191,28 +192,28 @@ const lv_font_t ui_font_bluetooth = {
     .user_data = NULL,
 };
 
-// ANTIALIASED CIRCLE ICON (PUA U+E001) - 13x13 matching Montserrat 14 play/stop symbols
+// ANTIALIASED CIRCLE ICON (PUA U+E001) - 15x15 matching Montserrat 14 play/stop symbols
 static LV_ATTRIBUTE_LARGE_CONST const uint8_t circle_icon_glyph_bitmap[] = {
-    0x00, 0x00, 0x01, 0x34, 0x31, 0x00, 0x00, 0x00,
-    0x00, 0x19, 0xef, 0xff, 0xe9, 0x10, 0x00, 0x00,
-    0x3e, 0xff, 0xff, 0xff, 0xfe, 0x30, 0x00, 0x1e,
-    0xff, 0xff, 0xff, 0xff, 0xfe, 0x10, 0x09, 0xff,
-    0xff, 0xff, 0xff, 0xff, 0xf9, 0x01, 0xef, 0xff,
-    0xff, 0xff, 0xff, 0xff, 0xe1, 0x3f, 0xff, 0xff,
-    0xff, 0xff, 0xff, 0xff, 0x34, 0xff, 0xff, 0xff,
-    0xff, 0xff, 0xff, 0xf4, 0x3f, 0xff, 0xff, 0xff,
-    0xff, 0xff, 0xff, 0x31, 0xef, 0xff, 0xff, 0xff,
-    0xff, 0xff, 0xe1, 0x09, 0xff, 0xff, 0xff, 0xff,
-    0xff, 0xf9, 0x00, 0x1e, 0xff, 0xff, 0xff, 0xff,
-    0xfe, 0x10, 0x00, 0x3e, 0xff, 0xff, 0xff, 0xfe,
-    0x30, 0x00, 0x00, 0x19, 0xef, 0xff, 0xe9, 0x10,
-    0x00, 0x00, 0x00, 0x01, 0x34, 0x31, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x03, 0x9c, 0xec, 0x93, 0x00, 0x00, 0x00,
+    0x07, 0xff, 0xff, 0xff, 0xf7, 0x00, 0x00, 0x07,
+    0xff, 0xff, 0xff, 0xff, 0xf7, 0x00, 0x03, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xf3, 0x00, 0x9f, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0x90, 0x0c, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xfc, 0x00, 0xef, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xe0, 0x0c, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xfc, 0x00, 0x9f, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0x90, 0x03, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xf3, 0x00, 0x07, 0xff, 0xff, 0xff, 0xff,
+    0xf7, 0x00, 0x00, 0x07, 0xff, 0xff, 0xff, 0xf7,
+    0x00, 0x00, 0x00, 0x03, 0x9c, 0xec, 0x93, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00
 };
 
 static const lv_font_fmt_txt_glyph_dsc_t circle_icon_glyph_dsc[] = {
     {.bitmap_index = 0, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0} /* id = 0 reserved */,
-    {.bitmap_index = 0, .adv_w = 196, .box_w = 15, .box_h = 15, .ofs_x = -1, .ofs_y = -2}
+    {.bitmap_index = 0, .adv_w = 196, .box_w = 15, .box_h = 15, .ofs_x = -1, .ofs_y = -1}
 };
 
 static const lv_font_fmt_txt_cmap_t circle_icon_cmaps[] = {
@@ -263,7 +264,7 @@ const lv_font_t ui_font_circle = {
 // Spacing offset between Bluetooth icon and battery percentage/icon
 static constexpr lv_coord_t BLE_ICON_SPACING_X = -4;
 
-void createBatteryIndicator(lv_obj_t* parent, bool showPercentage, lv_align_t align, lv_coord_t x_ofs, lv_coord_t y_ofs) {
+void createBatteryIndicator(lv_obj_t* parent, bool showPercentage, lv_align_t align, lv_coord_t x_ofs, lv_coord_t y_ofs, bool bleRight) {
     if (!parent || numBatteryIndicators >= MAX_BATTERY_INDICATORS) return;
 
     // Battery Icon Label
@@ -279,23 +280,35 @@ void createBatteryIndicator(lv_obj_t* parent, bool showPercentage, lv_align_t al
         lv_label_set_text(pct, "--%");
         lv_obj_set_style_text_font(pct, &lv_font_montserrat_10, 0);
         lv_obj_set_style_text_color(pct, UI_COLOR_TEXT, 0);
-        lv_obj_align_to(pct, icon, LV_ALIGN_OUT_LEFT_MID, -4, 0);
+        if (bleRight) {
+            lv_obj_align_to(pct, icon, LV_ALIGN_OUT_RIGHT_MID, 4, 0);
+        } else {
+            lv_obj_align_to(pct, icon, LV_ALIGN_OUT_LEFT_MID, -4, 0);
+        }
     }
 
-    // Bluetooth Icon Label (left of the battery indicator)
+    // Bluetooth Icon Label (when bleRight is true: to the right of battery indicator; else to the left)
     lv_obj_t* ble = lv_label_create(parent);
     lv_label_set_text(ble, UI_SYMBOL_BLUETOOTH);
     lv_obj_set_style_text_font(ble, &ui_font_bluetooth, 0);
     lv_obj_set_style_text_color(ble, UI_COLOR_TEXT_DIM, 0);
-    if (pct != nullptr) {
-        lv_obj_align_to(ble, pct, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
+    if (bleRight) {
+        if (pct != nullptr) {
+            lv_obj_align_to(ble, pct, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
+        } else {
+            lv_obj_align_to(ble, icon, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
+        }
     } else {
-        lv_obj_align_to(ble, icon, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
+        if (pct != nullptr) {
+            lv_obj_align_to(ble, pct, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
+        } else {
+            lv_obj_align_to(ble, icon, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
+        }
     }
     if (!currentBLESetting) {
         lv_obj_add_flag(ble, LV_OBJ_FLAG_HIDDEN);
     }
-    batteryIndicators[numBatteryIndicators++] = {icon, pct, ble};
+    batteryIndicators[numBatteryIndicators++] = {icon, pct, ble, bleRight};
 }
 
 static uint32_t lastBatteryUIUpdateTime = 0;
@@ -377,17 +390,29 @@ void updateBatteryUI(bool force) {
             lv_label_set_text(batteryIndicators[i].pct, pctStr);
             lv_obj_set_style_text_color(batteryIndicators[i].pct, col, 0);
             if (batteryIndicators[i].icon != nullptr && lv_obj_is_valid(batteryIndicators[i].icon)) {
-                lv_obj_align_to(batteryIndicators[i].pct, batteryIndicators[i].icon, LV_ALIGN_OUT_LEFT_MID, -4, 0);
+                if (batteryIndicators[i].bleRight) {
+                    lv_obj_align_to(batteryIndicators[i].pct, batteryIndicators[i].icon, LV_ALIGN_OUT_RIGHT_MID, 4, 0);
+                } else {
+                    lv_obj_align_to(batteryIndicators[i].pct, batteryIndicators[i].icon, LV_ALIGN_OUT_LEFT_MID, -4, 0);
+                }
             }
         }
         if (batteryIndicators[i].ble != nullptr && lv_obj_is_valid(batteryIndicators[i].ble)) {
             if (bleOn) {
                 lv_obj_clear_flag(batteryIndicators[i].ble, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_set_style_text_color(batteryIndicators[i].ble, bleCol, 0);
-                if (batteryIndicators[i].pct != nullptr && lv_obj_is_valid(batteryIndicators[i].pct)) {
-                    lv_obj_align_to(batteryIndicators[i].ble, batteryIndicators[i].pct, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
-                } else if (batteryIndicators[i].icon != nullptr && lv_obj_is_valid(batteryIndicators[i].icon)) {
-                    lv_obj_align_to(batteryIndicators[i].ble, batteryIndicators[i].icon, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
+                if (batteryIndicators[i].bleRight) {
+                    if (batteryIndicators[i].pct != nullptr && lv_obj_is_valid(batteryIndicators[i].pct)) {
+                        lv_obj_align_to(batteryIndicators[i].ble, batteryIndicators[i].pct, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
+                    } else if (batteryIndicators[i].icon != nullptr && lv_obj_is_valid(batteryIndicators[i].icon)) {
+                        lv_obj_align_to(batteryIndicators[i].ble, batteryIndicators[i].icon, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
+                    }
+                } else {
+                    if (batteryIndicators[i].pct != nullptr && lv_obj_is_valid(batteryIndicators[i].pct)) {
+                        lv_obj_align_to(batteryIndicators[i].ble, batteryIndicators[i].pct, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
+                    } else if (batteryIndicators[i].icon != nullptr && lv_obj_is_valid(batteryIndicators[i].icon)) {
+                        lv_obj_align_to(batteryIndicators[i].ble, batteryIndicators[i].icon, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
+                    }
                 }
             } else {
                 lv_obj_add_flag(batteryIndicators[i].ble, LV_OBJ_FLAG_HIDDEN);
@@ -423,6 +448,7 @@ void initUI() {
     buildSettingsScreen();
     buildBrightnessScreen();
     buildScalingScreen();
+    buildResetScreen();
     buildErrorScreen();
 
     // Initial state: Boot Screen
@@ -636,7 +662,7 @@ void uiNavToMainMenu() {
     }
 
     // Persist settings if exiting Settings or its dedicated sub-pages
-    if (prevState == APP_STATE_SETTINGS || prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS) {
+    if (prevState == APP_STATE_SETTINGS || prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS || prevState == APP_STATE_RESET_CONFIRM) {
         saveSettingsIfDirty();
     }
 
@@ -650,7 +676,7 @@ void uiNavToMainMenu() {
     WheelEventType dummy;
     while (getWheelEvent(dummy, 0)) { }
 
-    if (prevState == APP_STATE_SETTINGS || prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS) {
+    if (prevState == APP_STATE_SETTINGS || prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS || prevState == APP_STATE_RESET_CONFIRM) {
         // Between menu screens: fast slide transition (100ms)
         lv_scr_load_anim(screen_main_menu, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 100, 0, false);
     } else {
@@ -704,7 +730,7 @@ void uiNavToSettings(int focusIndex) {
     WheelEventType dummy;
     while (getWheelEvent(dummy, 0)) { }
 
-    if (prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS) {
+    if (prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS || prevState == APP_STATE_RESET_CONFIRM) {
         // Subpage back to settings: slide right
         lv_scr_load_anim(screen_settings, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 100, 0, false);
     } else {
@@ -712,6 +738,21 @@ void uiNavToSettings(int focusIndex) {
         lv_scr_load_anim(screen_settings, LV_SCR_LOAD_ANIM_MOVE_LEFT, 100, 0, false);
     }
     Serial.println("[UI] Transitioned to Settings (100ms Slide)");
+}
+
+void uiNavToResetConfirm() {
+    AppState prevState = currentAppState;
+    currentAppState = APP_STATE_RESET_CONFIRM;
+    lv_group_remove_all_objs(ui_wheel_group);
+
+    setupResetGroup();
+
+    WheelEventType dummy;
+    while (getWheelEvent(dummy, 0)) { }
+
+    // Slide left into confirmation screen
+    lv_scr_load_anim(screen_reset, LV_SCR_LOAD_ANIM_MOVE_LEFT, 100, 0, false);
+    Serial.println("[UI] Transitioned to Reset Confirmation Screen (100ms Slide)");
 }
 
 void uiNavToBrightness() {

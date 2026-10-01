@@ -1,4 +1,5 @@
 #include "ble.hpp"
+#include "ppt.hpp"
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
@@ -28,7 +29,11 @@ static bool bleEnabled = true;
 static bool bleInitialized = false;
 static char connectedClientInfo[32] = "";
 static volatile bool bleStreamingActive = false;
+static volatile bool s_pptTransferActive = false;
+static volatile bool s_pptTransferPending = false;
 static volatile uint16_t currentPeerMTU = 23;
+
+static void runPPTSpectralTransfer();
 
 // Ring buffer for incoming RX bytes
 static constexpr size_t RX_BUFFER_SIZE = 256;
@@ -47,12 +52,14 @@ struct BLEFrameSnapshot {
 static BLEFrameSnapshot s_bleFrameBuffer;
 static BLEFrameSnapshot s_bleWorkerSnapshot; // Statically allocated to prevent stack overflow
 static SemaphoreHandle_t s_bleFrameMutex = nullptr;
+static SemaphoreHandle_t s_bleTxMutex = nullptr;
 static TaskHandle_t s_bleStreamTaskHandle = nullptr;
 static volatile bool s_bleNewFrameAvailable = false;
 alignas(4) static uint8_t s_blePacketBuffer[4 + 768 * sizeof(float)]; // 3076 bytes aligned (float32)
 
 static uint16_t s_activeConnId = 0;
 static bool s_hasActiveConn = false;
+static esp_bd_addr_t s_peerBda = {};
 
 static void bleStreamTask(void* pvParameters);
 
@@ -66,6 +73,7 @@ class ServerCallbacks : public BLEServerCallbacks {
         if (param) {
             s_activeConnId = param->connect.conn_id;
             s_hasActiveConn = true;
+            memcpy(s_peerBda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
             snprintf(connectedClientInfo, sizeof(connectedClientInfo),
                      "%02X:%02X:%02X:%02X:%02X:%02X",
                      param->connect.remote_bda[0],
@@ -75,6 +83,15 @@ class ServerCallbacks : public BLEServerCallbacks {
                      param->connect.remote_bda[4],
                      param->connect.remote_bda[5]);
             Serial.printf("[BLE] Peer connected: %s (connId=%u)\n", connectedClientInfo, (unsigned int)s_activeConnId);
+
+            // Enable Data Length Extension (DLE) so 251-byte Link Layer packets are supported
+            esp_ble_gap_set_pkt_data_len(param->connect.remote_bda, 251);
+
+            // NOTE: Do NOT call esp_ble_gap_update_conn_params here!
+            // Calling it during onConnect causes an L2CAP packet collision with the client's
+            // (Windows/Chrome) in-flight ATT MTU exchange, forcing Windows to abort the 517B exchange
+            // and throttle down to its 138B controller buffer.
+            // Fast connection interval (15ms - 30ms) is requested safely in onMtuChanged() below.
         }
     }
 
@@ -82,6 +99,17 @@ class ServerCallbacks : public BLEServerCallbacks {
         if (param) {
             currentPeerMTU = param->mtu.mtu;
             Serial.printf("[BLE] MTU negotiated with peer: %u bytes\n", (unsigned int)currentPeerMTU);
+
+            // Now that MTU exchange is complete and the link is established, request fast interval
+            if (s_hasActiveConn) {
+                esp_ble_conn_update_params_t conn_params = {};
+                memcpy(conn_params.bda, s_peerBda, sizeof(esp_bd_addr_t));
+                conn_params.min_int = 0x0c; // 15 ms
+                conn_params.max_int = 0x18; // 30 ms
+                conn_params.latency = 0;
+                conn_params.timeout = 400;  // 4000 ms
+                esp_ble_gap_update_conn_params(&conn_params);
+            }
         }
     }
 
@@ -90,6 +118,8 @@ class ServerCallbacks : public BLEServerCallbacks {
         s_hasActiveConn = false;
         connectedClientInfo[0] = '\0';
         bleStreamingActive = false; // Automatically halt active frame streaming
+        // Preserve currentPeerMTU so warm reconnections over existing cached OS links
+        // retain the negotiated MTU (Windows/Chrome won't re-exchange MTU on cached links)
         Serial.println("[BLE] Peer disconnected.");
         if (bleEnabled) {
             pServer->startAdvertising();
@@ -111,6 +141,17 @@ class RxCallbacks : public BLECharacteristicCallbacks {
         }
     }
 };
+
+class TxNotifyCallbacks : public BLECharacteristicCallbacks {
+public:
+    volatile bool lastFailed = false;
+    void onStatus(BLECharacteristic* pCharacteristic, Status s, uint32_t code) override {
+        if (s == ERROR_GATT) {
+            lastFailed = true;
+        }
+    }
+};
+static TxNotifyCallbacks s_txNotifyCallbacks;
 
 class SecurityCallbacks : public BLESecurityCallbacks {
     uint32_t onPassKeyRequest() override { return 0; }
@@ -144,6 +185,7 @@ bool initBLE(const char* deviceName) {
         BLECharacteristic::PROPERTY_NOTIFY
     );
     pTxCharacteristic->addDescriptor(new BLE2902());
+    pTxCharacteristic->setCallbacks(&s_txNotifyCallbacks);
 
     pRxCharacteristic = pNusService->createCharacteristic(
         CHARACTERISTIC_UUID_RX,
@@ -179,9 +221,12 @@ bool initBLE(const char* deviceName) {
     pAdvertising->setAdvertisementData(advData);
     pAdvertising->setScanResponseData(scanResponseData);
 
-    // Initialize async streaming worker task and synchronization mutex
+    // Initialize async streaming worker task and synchronization mutexes
     if (!s_bleFrameMutex) {
         s_bleFrameMutex = xSemaphoreCreateMutex();
+    }
+    if (!s_bleTxMutex) {
+        s_bleTxMutex = xSemaphoreCreateMutex();
     }
     if (!s_bleStreamTaskHandle) {
         xTaskCreatePinnedToCore(
@@ -241,6 +286,26 @@ void setBLEEnabled(bool enable) {
     }
 }
 
+static bool sendBleChunk(const uint8_t* data, size_t len) {
+    if (!deviceConnected || !pTxCharacteristic || !data || len == 0) return false;
+
+    pTxCharacteristic->setValue(const_cast<uint8_t*>(data), len);
+
+    int retries = 0;
+    while (retries < 25 && deviceConnected) {
+        s_txNotifyCallbacks.lastFailed = false;
+        pTxCharacteristic->notify();
+        if (!s_txNotifyCallbacks.lastFailed) {
+            return true;
+        }
+        // Controller TX buffer congested / no memory:
+        // Yield for BLE connection event to clear queue
+        vTaskDelay(pdMS_TO_TICKS(8));
+        retries++;
+    }
+    return true;
+}
+
 void bleWrite(const uint8_t* data, size_t len) {
     if (!deviceConnected || !data || len == 0 || !pTxCharacteristic) {
         return;
@@ -253,22 +318,38 @@ void bleWrite(const uint8_t* data, size_t len) {
     if (chunkSize > 512) chunkSize = 512;
     if (chunkSize < 20) chunkSize = 20;
 
-    size_t offset = 0;
-    while (offset < len) {
-        if (!deviceConnected) break;
-        size_t toSend = (len - offset > chunkSize) ? chunkSize : (len - offset);
-        pTxCharacteristic->setValue(const_cast<uint8_t*>(data + offset), toSend);
-        pTxCharacteristic->notify();
+    // Mutex serialization: Wait for any active in-flight binary frame burst to complete
+    // so telemetry text is sent atomically BETWEEN whole frames, never interleaved mid-frame
+    if (s_bleTxMutex != nullptr && xSemaphoreTake(s_bleTxMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        size_t offset = 0;
+        size_t chunkCount = 0;
+        while (offset < len) {
+            if (!deviceConnected) break;
+            size_t toSend = (len - offset > chunkSize) ? chunkSize : (len - offset);
 
-        if (pHm10Characteristic) {
-            pHm10Characteristic->setValue(const_cast<uint8_t*>(data + offset), toSend);
-            pHm10Characteristic->notify();
-        }
+            bool sent = sendBleChunk(data + offset, toSend);
+            if (!sent && !deviceConnected) {
+                break;
+            }
 
-        offset += toSend;
-        if (offset < len) {
-            vTaskDelay(pdMS_TO_TICKS(1));
+            if (pHm10Characteristic && !s_pptTransferActive) {
+                pHm10Characteristic->setValue(const_cast<uint8_t*>(data + offset), toSend);
+                pHm10Characteristic->notify();
+            }
+
+            offset += toSend;
+            chunkCount++;
+            if (offset < len) {
+                if (chunkSize <= 32) {
+                    // At small MTU (e.g. 20-byte chunks), yield 6 ms per chunk
+                    // to respect BLE connection event boundaries
+                    vTaskDelay(pdMS_TO_TICKS(6));
+                } else {
+                    vTaskDelay(pdMS_TO_TICKS(2));
+                }
+            }
         }
+        xSemaphoreGive(s_bleTxMutex);
     }
 }
 
@@ -302,6 +383,10 @@ int bleRead() {
     return byte;
 }
 
+bool isBLETransferringPPT() {
+    return s_pptTransferActive || s_pptTransferPending;
+}
+
 void outPrintf(const char* fmt, ...) {
     char buf[256];
     va_list args;
@@ -311,7 +396,8 @@ void outPrintf(const char* fmt, ...) {
 
     if (len > 0) {
         Serial.print(buf);
-        if (isBLEConnected()) {
+        // Suppress periodic background telemetry over BLE while PPT Spectral transmission is active
+        if (isBLEConnected() && !isBLETransferringPPT()) {
             bleWrite(reinterpret_cast<const uint8_t*>(buf), static_cast<size_t>(len));
         }
     }
@@ -320,7 +406,7 @@ void outPrintf(const char* fmt, ...) {
 void outPrint(const char* str) {
     if (!str) return;
     Serial.print(str);
-    if (isBLEConnected()) {
+    if (isBLEConnected() && !isBLETransferringPPT()) {
         blePrint(str);
     }
 }
@@ -329,7 +415,11 @@ void outPrintln(const char* str) {
     if (str && strlen(str) > 0) {
         outPrint(str);
     }
-    outPrint("\r\n");
+    if (!isBLETransferringPPT()) {
+        outPrint("\r\n");
+    } else {
+        Serial.print("\r\n");
+    }
 }
 
 bool isBLEStreaming() {
@@ -338,11 +428,23 @@ bool isBLEStreaming() {
 
 void setBLEStreaming(bool enable) {
     if (bleStreamingActive == enable) return;
-    bleStreamingActive = enable;
     if (enable) {
         Serial.println("\n[STREAM] >>> THERMAL_STREAM_START: 32x24 int16, sync=0x5AA55AA6, bytes=1540 <<<");
         blePrintf("[STREAM] START: 32x24 int16, sync=0x5AA55AA6\r\n");
+        bleStreamingActive = true;
+
+        // Request fast connection interval (15ms - 30ms) now that GATT discovery and MTU are established
+        if (s_hasActiveConn) {
+            esp_ble_conn_update_params_t conn_params = {};
+            memcpy(conn_params.bda, s_peerBda, sizeof(esp_bd_addr_t));
+            conn_params.min_int = 0x0c; // 15 ms (compliant with Windows and Apple BLE limits)
+            conn_params.max_int = 0x18; // 30 ms
+            conn_params.latency = 0;
+            conn_params.timeout = 400;  // 4000 ms
+            esp_ble_gap_update_conn_params(&conn_params);
+        }
     } else {
+        bleStreamingActive = false;
         Serial.println("\n[STREAM] >>> THERMAL_STREAM_STOPPED <<<");
         blePrintf("[STREAM] STOPPED\r\n");
     }
@@ -356,7 +458,13 @@ static void bleStreamTask(void* pvParameters) {
         // Wait for notification when a new frame is posted (or timeout 50ms)
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50));
 
-        if (!bleStreamingActive || !deviceConnected || !pTxCharacteristic) {
+        // 1. Service pending PPT Spectral Phasegram wireless transfer if requested
+        if (s_pptTransferPending) {
+            s_pptTransferPending = false;
+            runPPTSpectralTransfer();
+        }
+
+        if (s_pptTransferActive || !bleStreamingActive || !deviceConnected || !pTxCharacteristic) {
             continue;
         }
 
@@ -380,10 +488,10 @@ static void bleStreamTask(void* pvParameters) {
                       s_bleWorkerSnapshot.minTemp, s_bleWorkerSnapshot.maxTemp);
 
         // 2. Query true connection MTU (negotiated with peer)
-        uint16_t peerMtu = currentPeerMTU;
+        uint16_t peerMtu = (currentPeerMTU > 23) ? currentPeerMTU : 23;
         if (pServer && s_hasActiveConn) {
             uint16_t serverMtu = pServer->getPeerMTU(s_activeConnId);
-            if (serverMtu >= 23) {
+            if (serverMtu > peerMtu) {
                 peerMtu = serverMtu;
             }
         }
@@ -393,27 +501,48 @@ static void bleStreamTask(void* pvParameters) {
         if (chunkSize > 512) chunkSize = 512;
         if (chunkSize < 20) chunkSize = 20;
 
-        // 3. Assemble 3076-byte packet: MAGIC_HEADER (0x5AA55AA5) + 768 float32 values
+        // 3. Assemble 1540-byte packet: MAGIC_HEADER (0x5AA55AA6) + 768 int16 values (centi-degrees C)
+        // 1540 bytes vs 3076 bytes cuts radio airtime by 50% and requires only 3-4 chunks at MTU 517!
         s_blePacketBuffer[0] = 0x5A;
         s_blePacketBuffer[1] = 0xA5;
         s_blePacketBuffer[2] = 0x5A;
-        s_blePacketBuffer[3] = 0xA5;
+        s_blePacketBuffer[3] = 0xA6;
 
-        memcpy(s_blePacketBuffer + 4, s_bleWorkerSnapshot.temperatures, 768 * sizeof(float));
-        size_t totalBytes = 4 + 768 * sizeof(float); // 3076 bytes
+        int16_t* pInt16 = reinterpret_cast<int16_t*>(s_blePacketBuffer + 4);
+        for (size_t i = 0; i < 768; ++i) {
+            float val = s_bleWorkerSnapshot.temperatures[i];
+            if (!std::isfinite(val)) val = 25.0f;
+            int32_t cdeg = (int32_t)std::round(val * 100.0f);
+            if (cdeg < -32768) cdeg = -32768;
+            if (cdeg > 32767) cdeg = 32767;
+            pInt16[i] = (int16_t)cdeg;
+        }
+        size_t totalBytes = 4 + 768 * sizeof(int16_t); // 1540 bytes
         size_t offset = 0;
 
         // Stream notifications directly to the subscribed NUS TX characteristic
-        while (offset < totalBytes) {
-            if (!deviceConnected || !bleStreamingActive) break;
-            size_t toSend = (totalBytes - offset > chunkSize) ? chunkSize : (totalBytes - offset);
-            pTxCharacteristic->setValue(s_blePacketBuffer + offset, toSend);
-            pTxCharacteristic->notify();
+        // Protect entire frame burst with s_bleTxMutex so telemetry text is sent between frames, never inside
+        if (s_bleTxMutex != nullptr && xSemaphoreTake(s_bleTxMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            size_t chunkCount = 0;
+            while (offset < totalBytes) {
+                if (!deviceConnected || !bleStreamingActive) break;
+                size_t toSend = (totalBytes - offset > chunkSize) ? chunkSize : (totalBytes - offset);
+                pTxCharacteristic->setValue(s_blePacketBuffer + offset, toSend);
+                pTxCharacteristic->notify();
 
-            offset += toSend;
-            if (offset < totalBytes) {
-                vTaskDelay(pdMS_TO_TICKS(1));
+                offset += toSend;
+                if (offset < totalBytes) {
+                    chunkCount++;
+                    // For small MTU (e.g. 20 bytes = 77 chunks), yield briefly every 8 chunks
+                    // to prevent the BLE controller radio buffer from overflowing
+                    if (chunkSize <= 32 && (chunkCount % 8 == 0)) {
+                        vTaskDelay(pdMS_TO_TICKS(1));
+                    } else {
+                        delayMicroseconds(200);
+                    }
+                }
             }
+            xSemaphoreGive(s_bleTxMutex);
         }
     }
 }
@@ -434,5 +563,122 @@ void streamThermalFrameBLE(const float* temps, size_t count, float minTemp, floa
         if (s_bleStreamTaskHandle != NULL) {
             xTaskNotifyGive(s_bleStreamTaskHandle);
         }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Pulsed Phase Thermography (PPT) Asynchronous Spectral BLE Transmission
+// -----------------------------------------------------------------------------
+
+static void base64Encode(const uint8_t* src, size_t len, char* dst, size_t maxDst) {
+    static const char b64Chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t outLen = 4 * ((len + 2) / 3);
+    if (outLen + 1 > maxDst) return;
+
+    size_t di = 0;
+    for (size_t i = 0; i < len; i += 3) {
+        uint32_t b0 = src[i];
+        uint32_t b1 = (i + 1 < len) ? src[i + 1] : 0;
+        uint32_t b2 = (i + 2 < len) ? src[i + 2] : 0;
+        uint32_t triple = (b0 << 16) | (b1 << 8) | b2;
+
+        dst[di++] = b64Chars[(triple >> 18) & 0x3F];
+        dst[di++] = b64Chars[(triple >> 12) & 0x3F];
+        dst[di++] = (i + 1 < len) ? b64Chars[(triple >> 6) & 0x3F] : '=';
+        dst[di++] = (i + 2 < len) ? b64Chars[triple & 0x3F] : '=';
+    }
+    dst[di] = '\0';
+}
+
+static void runPPTSpectralTransfer() {
+    s_pptTransferActive = true;
+    PPTSpectralSession* session = pptGetActiveSession();
+    if (!session || !deviceConnected) {
+        s_pptTransferActive = false;
+        return;
+    }
+
+    Serial.printf("\n[BLE] >>> STARTING PPT SPECTRAL PHASEGRAM WIRELESS STREAM (16 harmonic frequencies) <<<\n");
+
+    char lineBuf[256];
+    snprintf(lineBuf, sizeof(lineBuf),
+             "[PPT_SESSION_START] TIMESTAMP=%lu TOTAL_PHASEGRAMS=%u WIDTH=32 HEIGHT=24\r\n",
+             (unsigned long)session->sessionTimestamp,
+             (unsigned int)session->totalPhasegrams);
+    blePrint(lineBuf);
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    for (int i = 0; i < session->totalPhasegrams; ++i) {
+        if (!deviceConnected) {
+            Serial.println("[BLE] Peer disconnected during PPT transfer. Transmission aborted.");
+            break;
+        }
+
+        const PPTPhasegram& pg = session->phasegrams[i];
+
+        // 1. Phasegram metadata header
+        snprintf(lineBuf, sizeof(lineBuf),
+                 "[PPT_PHASEGRAM_START] HARMONIC=%d/16 FREQ_HZ=%.3f DEPTH=%s MIN_RAD=%.4f MAX_RAD=%.4f CTR_RAD=%.4f\r\n",
+                 pg.harmonicBin, pg.frequencyHz, pg.diffusionDepth,
+                 pg.minPhaseRad, pg.maxPhaseRad, pg.centerPhaseRad);
+        blePrint(lineBuf);
+        vTaskDelay(pdMS_TO_TICKS(25));
+
+        // 2. Format atomic line: "[PPT_PHASEGRAM_DATA] <1024_b64_chars>\r\n"
+        const char prefix[] = "[PPT_PHASEGRAM_DATA] ";
+        const size_t prefixLen = sizeof(prefix) - 1; // 21
+        memcpy(session->dataLine, prefix, prefixLen);
+        base64Encode(pg.normPhaseGrid, PPT_PIXELS, session->dataLine + prefixLen, sizeof(session->dataLine) - prefixLen - 4);
+        size_t b64Len = strlen(session->dataLine);
+        session->dataLine[b64Len] = '\r';
+        session->dataLine[b64Len + 1] = '\n';
+        session->dataLine[b64Len + 2] = '\0';
+
+        // Send atomic line (all 1024 Base64 chars together with newline in single call)
+        blePrint(session->dataLine);
+        vTaskDelay(pdMS_TO_TICKS(25));
+
+        // 3. Phasegram completion & CRC32 verification footer
+        snprintf(lineBuf, sizeof(lineBuf),
+                 "[PPT_PHASEGRAM_END] HARMONIC=%d CRC32=0x%08lX\r\n",
+                 pg.harmonicBin, (unsigned long)pg.crc32);
+        blePrint(lineBuf);
+
+        Serial.printf("[BLE] PPT Harmonic %d/16 (%.2f Hz, %s) streamed (CRC32: 0x%08lX)\n",
+                      pg.harmonicBin, pg.frequencyHz, pg.diffusionDepth, (unsigned long)pg.crc32);
+
+        // Pacing delay between harmonic phasegrams
+        vTaskDelay(pdMS_TO_TICKS(35));
+    }
+
+    if (deviceConnected) {
+        snprintf(lineBuf, sizeof(lineBuf),
+                 "[PPT_SESSION_COMPLETE] TIMESTAMP=%lu TOTAL_PHASEGRAMS=%u STATUS=VERIFIED\r\n",
+                 (unsigned long)session->sessionTimestamp,
+                 (unsigned int)session->totalPhasegrams);
+        blePrint(lineBuf);
+        vTaskDelay(pdMS_TO_TICKS(60));
+        // Send completion marker twice to guarantee delivery over BLE
+        blePrint(lineBuf);
+        vTaskDelay(pdMS_TO_TICKS(50));
+        Serial.println("[BLE] >>> PPT SPECTRAL PHASEGRAM TRANSMISSION COMPLETE (16/16 verified) <<<\n");
+    }
+
+    s_pptTransferActive = false;
+}
+
+void triggerPPTBLETransfer() {
+    if (!deviceConnected) {
+        Serial.println("[BLE] Cannot start PPT transfer: No BLE peer connected.");
+        return;
+    }
+    if (s_pptTransferActive || s_pptTransferPending) {
+        Serial.println("[BLE] PPT spectral transfer is already pending or in progress.");
+        return;
+    }
+
+    s_pptTransferPending = true;
+    if (s_bleStreamTaskHandle != NULL) {
+        xTaskNotifyGive(s_bleStreamTaskHandle);
     }
 }

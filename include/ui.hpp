@@ -13,6 +13,7 @@ enum AppState {
     APP_STATE_SETTINGS,         // Settings & configuration screen
     APP_STATE_BRIGHTNESS,       // Dedicated display backlight brightness slider screen
     APP_STATE_SCALING_MENU,     // Dedicated scaling / interpolation mode select screen
+    APP_STATE_RESET_CONFIRM,    // Factory reset confirmation dialogue screen
     APP_STATE_SENSOR_ERROR,     // Hardware disconnected / sensor error screen
     APP_STATE_PPT_ARMED,        // PPT Armed, awaiting thermal pulse trigger
     APP_STATE_PPT_ACQUIRING,    // PPT Recording 64 frames
@@ -79,11 +80,12 @@ extern lv_obj_t* screen_main_menu;
 extern lv_obj_t* screen_settings;
 extern lv_obj_t* screen_brightness;
 extern lv_obj_t* screen_scaling;
+extern lv_obj_t* screen_reset;
 extern lv_obj_t* screen_error;
 
 // Screen item counts
 constexpr int MAIN_MENU_COUNT = 5;
-constexpr int SETTINGS_COUNT = 10;
+constexpr int SETTINGS_COUNT = 11;
 constexpr int SCALING_OPTIONS_COUNT = 7;
 
 // Bluetooth Icon Font & Symbol
@@ -130,6 +132,7 @@ void uiNavToMainMenu();
 void uiNavToSettings(int focusIndex = 0);
 void uiNavToBrightness();
 void uiNavToScalingMenu();
+void uiNavToResetConfirm();
 void uiNavToSensorError(uint32_t attemptCount);
 void uiDismissSensorError();
 void uiNavToPPT();
@@ -143,6 +146,8 @@ void buildMainMenuScreen();
 void buildSettingsScreen();
 void buildBrightnessScreen();
 void buildScalingScreen();
+void buildResetScreen();
+void setupResetGroup();
 void buildErrorScreen();
 void refreshMainMenuBLEState(bool resetFocus = false);
 
@@ -182,7 +187,7 @@ void updateSensorErrorAttempt(uint32_t attemptCount);
 void resetSensorErrorAttempt();
 
 // Battery UI Indicator Management
-void createBatteryIndicator(lv_obj_t* parent, bool showPercentage = true, lv_align_t align = LV_ALIGN_TOP_RIGHT, lv_coord_t x_ofs = -14, lv_coord_t y_ofs = 9);
+void createBatteryIndicator(lv_obj_t* parent, bool showPercentage = true, lv_align_t align = LV_ALIGN_TOP_RIGHT, lv_coord_t x_ofs = -14, lv_coord_t y_ofs = 9, bool bleRight = false);
 void updateBatteryUI(bool force = false);
 
 // Fullscreen Thermal View Controls

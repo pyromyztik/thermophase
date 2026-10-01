@@ -63,6 +63,9 @@ static void handleSerialCommand(const String& cmd) {
         } else {
             Serial.printf("[SERIAL] Current Display Brightness: %d%%\n", getDisplayBrightness());
         }
+    } else if (cmd.equalsIgnoreCase("ppt_send") || cmd.equalsIgnoreCase("ppt_transfer")) {
+        Serial.println("\n[CMD] Manual PPT Spectral Phasegram BLE Transfer Triggered");
+        triggerPPTBLETransfer();
     } else if (cmd.equalsIgnoreCase("help") || cmd.equalsIgnoreCase("?")) {
         Serial.println("\n================ Serial Controls & Commands ================");
         Serial.println("  [Keyboard Controls]");

@@ -37,7 +37,7 @@ void setup() {
     Serial.setTimeout(50);
 
     Serial.println("\n========================================================");
-    Serial.println("  ESP32-S3 Real-Time Bilinear Thermal Camera System");
+    Serial.println("  ESP32-S3 Real-Time Thermal Camera System");
     Serial.println("========================================================");
 
     // Load user settings from ESP32 NVS (Preferences) before initializing Display & UI
@@ -46,7 +46,7 @@ void setup() {
     // Initialize BLE Subsystem (Nordic UART Service, advertising as "thermophase")
     initBLE("thermophase");
 
-    // 1. Initialize ILI9341 Display & Bilinear tables FIRST and render Boot Screen
+    // 1. Initialize ILI9341 Display FIRST and render Boot Screen
     // (TFT_LED is kept LOW until the boot screen is drawn in canvas and pushed to LCD memory)
     if (!initDisplay()) {
         Serial.println("[MAIN] Display initialization failed! Check wiring & SPI lines.");
@@ -102,7 +102,7 @@ void setup() {
     );
 
     showBootScreen("System Ready!", 100);
-    delay(350); // Clean, polished hold so user sees full boot completion
+    delay(250); // hold so user sees full boot completion
 
     // 9. Create Display & Bilinear scaling task on Core 1
     BaseType_t resDisp = xTaskCreatePinnedToCore(
@@ -128,7 +128,12 @@ void loop() {
     // Process keyboard & serial commands for encoder emulation
     processSerialInput();
 
-    // Continuous status and error reporting every 2500 ms
+    // Continuous status and error reporting every 2500 ms (suppressed during active PPT transfer)
+    if (isBLETransferringPPT()) {
+        delay(10);
+        return;
+    }
+
     unsigned long now = millis();
     if (now - lastTelemetryTime >= 2500) {
         lastTelemetryTime = now;
@@ -199,17 +204,17 @@ void loop() {
             outPrintf("[SYS] Feed: %4.1f FPS | Spot: %4.1f C [%4.1f - %4.1f C] | Uptime: %lu s | BLE: %s\n",
                       displayFps, displayCenterTemp, displayMinTemp, displayMaxTemp, now / 1000,
                       isBLEConnected() ? "CONNECTED" : "ADVERTISING");
-            outPrintf(" [BATT] V_inst: %.3fV | V_avg: %.3fV | Step: %+.3fV | Drift: %+.3fV | State: %s (%u%%) | Deb: C=%u/4, D=%u/3 | Cand: %s (%s)\n",
+            outPrintf("[BATT] V_inst: %.3fV | V_avg: %.3fV | Step: %+.3fV | Drift: %+.3fV | State: %s (%u%%) | Deb: C=%u/4, D=%u/3 | Cand: %s (%s)\n",
                       bt.instantV, bt.avgV, bt.step, bt.drift, stateStr, bt.percentage,
                       bt.chargeDebounce, bt.dischargeDebounce, bt.candidate, bt.reason);
-            outPrintf(" [DISP] Mode: %s | Live Denoise: %s | Rotation: %s | Brightness: %u%%\n",
+            outPrintf("[DISP] Mode: %s | Live Denoise: %s | Rotation: %s | Brightness: %u%%\n",
                       modeName, getLiveDenoiseSetting() ? "ON" : "OFF",
                       (getDisplayRotationSetting() == 0) ? "0 deg" : "180 deg",
                       getDisplayBrightnessSetting());
-            outPrintf(" [COMP] Core 1: %4.1f%% (Scale: %4.1f ms, Flush: %4.1f ms, Headroom: %4.1f ms / %4.1f%%)\n",
+            outPrintf("[COMP] Core 1: %4.1f%% (Scale: %4.1f ms, Flush: %4.1f ms, Headroom: %4.1f ms / %4.1f%%)\n",
                       globalComputeStats.core1LoadPct, globalComputeStats.scaleTimeMs, globalComputeStats.flushTimeMs,
                       globalComputeStats.core1HeadroomMs, globalComputeStats.core1HeadroomPct);
-            outPrintf(" [COMP] Core 0: %4.1f%% (I2C: %4.1f ms) | Free DRAM: %u KB | Free PSRAM: %u KB\n\n",
+            outPrintf("[COMP] Core 0: %4.1f%% (I2C: %4.1f ms) | Free DRAM: %u KB | Free PSRAM: %u KB\n\n",
                       globalComputeStats.core0LoadPct, globalComputeStats.sensorReadMs,
                       ESP.getFreeHeap() / 1024, ESP.getFreePsram() / 1024);
         }

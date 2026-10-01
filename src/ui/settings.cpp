@@ -19,6 +19,7 @@ const char* settingsDescriptions[SETTINGS_COUNT] = {
     "Select Thermal Sensor's I2C clock: 400 kHz (clean & stable - runs at 8fps) or 800 kHz (little more noisy, but runs at 14-15fps)",
     "Enable or disable the on-board WS2812 RGB target / status indicator LED",
     "Enable or disable Bluetooth wireless telemetry & remote command streaming",
+    "Restore all system settings, display options, and hardware preferences to factory defaults.",
     "Save all settings and return to main menu."
 };
 
@@ -32,6 +33,7 @@ static const char* settingsLabels[SETTINGS_COUNT] = {
     "I2C Clock",
     "RGB LED",
     "Bluetooth",
+    "Factory Reset",
     "Back to Main Menu"
 };
 
@@ -146,7 +148,10 @@ static void settingsBtnEventCb(lv_event_t* e) {
                 }
                 break;
             }
-            case 9: // Back to Main Menu
+            case 9: // Factory Reset: Open confirmation screen
+                uiNavToResetConfirm();
+                return;
+            case 10: // Back to Main Menu
                 saveSettingsIfDirty();
                 uiNavToMainMenu();
                 return;
@@ -311,9 +316,16 @@ void buildSettingsScreen() {
         lv_obj_set_style_text_color(settingsNameLabels[i], (i == SETTINGS_COUNT - 1) ? UI_COLOR_TEXT_DIM : UI_COLOR_TEXT, 0);
 
         // Setting Value (Right column)
-        if (i < SETTINGS_COUNT - 1) {
+        if (i < 9) {
             settingsValLabels[i] = lv_label_create(settingsBtns[i]);
             lv_obj_align(settingsValLabels[i], LV_ALIGN_RIGHT_MID, -3, 0);
+            lv_obj_set_style_text_color(settingsValLabels[i], UI_COLOR_ACCENT, 0);
+            lv_obj_set_style_text_font(settingsValLabels[i], &lv_font_montserrat_12, 0);
+        } else if (i == 9) {
+            // Factory Reset action glyph
+            settingsValLabels[i] = lv_label_create(settingsBtns[i]);
+            lv_obj_align(settingsValLabels[i], LV_ALIGN_RIGHT_MID, -3, 0);
+            lv_label_set_text(settingsValLabels[i], LV_SYMBOL_REFRESH);
             lv_obj_set_style_text_color(settingsValLabels[i], UI_COLOR_ACCENT, 0);
             lv_obj_set_style_text_font(settingsValLabels[i], &lv_font_montserrat_12, 0);
         } else {
@@ -326,6 +338,7 @@ void buildSettingsScreen() {
     static lv_point_t sep1_pts[] = {{4, 0}, {196, 0}};
     static lv_point_t sep2_pts[] = {{4, 0}, {196, 0}};
     static lv_point_t sep3_pts[] = {{4, 0}, {196, 0}};
+    static lv_point_t sep4_pts[] = {{4, 0}, {196, 0}};
 
     // Section 1: DISPLAY & VIEW
     addSectionHeader("DISPLAY & VIEW");
@@ -354,8 +367,15 @@ void buildSettingsScreen() {
     // Divider 3
     addDivider(sep3_pts);
 
-    // Section 4: Exit Option
-    createSettingBtn(9); // Back to Main Menu
+    // Section 4: SYSTEM RESTORE
+    addSectionHeader("SYSTEM RESTORE");
+    createSettingBtn(9); // Factory Reset
+
+    // Divider 4
+    addDivider(sep4_pts);
+
+    // Section 5: Exit Option
+    createSettingBtn(10); // Back to Main Menu
 
     updateSettingsValues();
 
