@@ -2,6 +2,7 @@
 #include "display.hpp"
 #include "wheel.hpp"
 #include "rgb-led.hpp"
+#include "ui.hpp"
 
 // Global compute statistics instance
 volatile ComputeTelemetry globalComputeStats = {
@@ -86,19 +87,12 @@ void logSensorProfile(int64_t sensorActiveUs, int64_t sensorIntervalUs) {
 
 void printComputeHeadroomReport() {
     ScalingMode curMode = getScalingMode();
-    const char* modeNames[5] = {
-        "Nearest Neighbor",
-        "Bilinear",
-        "Bicubic (Catmull-Rom)",
-        "Lanczos-3",
-        "TAAU (Temporal AA)"
-    };
 
     Serial.println("\n=================== ESP32-S3 COMPUTE & HEADROOM AUDIT ===================");
 
     // Core 1 (Graphics, Scaling, LVGL)
     Serial.printf("[CORE 1: GRAPHICS & RENDERING]\n");
-    Serial.printf("  Active Scaling Mode:       %s\n", modeNames[(int)curMode % 5]);
+    Serial.printf("  Active Scaling Mode:       %s\n", getScalingModeLongName(curMode));
     Serial.printf("  Algorithm Execution Time:  %.2f ms / frame\n", globalComputeStats.scaleTimeMs);
     Serial.printf("  LVGL Draw & SPI DMA Flush: %.2f ms / frame\n", globalComputeStats.flushTimeMs);
     Serial.printf("  Total Active Frame Time:   %.2f ms\n", globalComputeStats.frameTotalMs);

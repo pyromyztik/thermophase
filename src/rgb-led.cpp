@@ -84,11 +84,10 @@ void ledAnimationTask(void *pvParameters) {
                 vTaskDelay(pdMS_TO_TICKS(40));
             } else if (state == APP_STATE_THERMAL_VIEW || state == APP_STATE_THERMAL_FREEZE) {
                 // LIVE THERMAL VIEW: Smoothly interpolate RGB LED to match the center reticle color
-                float range = displayMaxTemp - displayMinTemp;
-                if (range < THERMAL_MIN_RANGE_SPAN) {
-                    range = THERMAL_MIN_RANGE_SPAN;
-                }
-                float norm = (displayCenterTemp - displayMinTemp) / range;
+                float range = 0.0f;
+                float effectiveMin = 0.0f;
+                computeEffectiveThermalRange(displayMinTemp, displayMaxTemp, effectiveMin, range);
+                float norm = (displayCenterTemp - effectiveMin) / range;
                 if (norm < 0.0f) norm = 0.0f;
                 if (norm > 1.0f) norm = 1.0f;
                 int palIdx = (int)(norm * 255.0f);

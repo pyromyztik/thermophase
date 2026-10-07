@@ -40,10 +40,6 @@ static uint16_t whiteHotPalette[256];
 static uint16_t rainbowPalette[256];
 static const uint16_t* activePalette = ironbowPalette;
 
-// Smoothing variables for auto-ranging
-static float smoothedMin = 20.0f;
-static float smoothedMax = 35.0f;
-
 // Live telemetry variables for continuous serial reporting
 volatile float displayFps = 0.0f;
 volatile float displayCenterTemp = 0.0f;
@@ -281,6 +277,9 @@ static void disp_flush_cb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t*
 // Double-click and single-click detection variables
 static uint32_t lastWheelClickTime = 0;
 static bool pendingWheelSingleClick = false;
+static uint32_t s_lastRangeRotTime = 0;
+static int s_rangeRotTicks = 0;
+static WheelEventType s_lastRotDir = WHEEL_EVENT_NONE;
 
 // LVGL Rotary Wheel Input Callback
 static void wheel_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
@@ -314,6 +313,41 @@ static void wheel_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
                 // Long press opens Main Menu
                 uiNavToMainMenu();
                 break;
+            } else if (evt == WHEEL_EVENT_ROT_CW || evt == WHEEL_EVENT_ROT_CCW) {
+                uint32_t now = millis();
+                // Reset tracking if user paused for more than 1000ms
+                if (now - s_lastRangeRotTime > 1000) {
+                    s_rangeRotTicks = 0;
+                    s_lastRotDir = evt;
+                }
+                s_lastRangeRotTime = now;
+
+                // "only rotation in the same direction should increase the progress bar."
+                if (s_lastRotDir != evt) {
+                    s_lastRotDir = evt;
+                    s_rangeRotTicks = 1;
+                    hideThermalRangeProgressBar(true);
+                } else {
+                    s_rangeRotTicks++;
+                }
+
+                constexpr int TICKS_FOR_180_DEG = 10;
+                // 20 detents per 360° = 18° per detent. First 30° is < 2 ticks.
+                // "the bar shouldnt show up for the first 30 degrees rotated, after which it fades in quickly."
+                if (s_rangeRotTicks >= 2) {
+                    showThermalRangeProgressBar(s_rangeRotTicks, TICKS_FOR_180_DEG);
+                }
+
+                if (s_rangeRotTicks >= TICKS_FOR_180_DEG) {
+                    s_rangeRotTicks = 0;
+                    s_lastRotDir = WHEEL_EVENT_NONE;
+                    hideThermalRangeProgressBar(false);
+                    if (uiIsFullscreen()) {
+                        uiExitFullscreen();
+                    }
+                    uiNavToThermalRange(APP_STATE_THERMAL_VIEW);
+                    break;
+                }
             }
         } else if (state == APP_STATE_THERMAL_FREEZE) {
             if (evt == WHEEL_EVENT_CLICK) {
@@ -580,6 +614,13 @@ void displayTask(void *pvParameters) {
             }
         }
 
+        // Auto-hide range progress bar if user stopped rotating the knob for > 1000ms (1 second)
+        if (s_rangeRotTicks > 0 && (millis() - s_lastRangeRotTime > 1000)) {
+            s_rangeRotTicks = 0;
+            s_lastRotDir = WHEEL_EVENT_NONE;
+            hideThermalRangeProgressBar(true); // Animate smooth fade-out
+        }
+
         // 3. Thermal Frame Acquisition and Upscaling (when in live thermal view or PPT modes)
         bool frameProcessed = false;
         AppState curState = getAppState();
@@ -611,15 +652,13 @@ void displayTask(void *pvParameters) {
         if (curState != APP_STATE_THERMAL_FREEZE) {
             if (lastThermalState == APP_STATE_THERMAL_FREEZE && curState == APP_STATE_THERMAL_VIEW && lv_scr_act() == screen_thermal) {
                 // Immediately refresh HUD back to live hints on unfreeze
-                float range = smoothedMax - smoothedMin;
-                float effectiveMin = smoothedMin;
-                if (range < THERMAL_MIN_RANGE_SPAN) {
-                    float mid = 0.5f * (smoothedMin + smoothedMax);
-                    range = THERMAL_MIN_RANGE_SPAN;
-                    effectiveMin = mid - 0.5f * range;
-                }
+                float range = 0.0f;
+                float effectiveMin = 0.0f;
+                computeEffectiveThermalRange(lastValidFrame.minTemp, lastValidFrame.maxTemp, effectiveMin, range);
                 updateThermalHUD(
                     lastValidFrame.centerTemp,
+                    lastValidFrame.minTemp,
+                    lastValidFrame.maxTemp,
                     effectiveMin,
                     effectiveMin + range,
                     currentFps,
@@ -664,28 +703,9 @@ void displayTask(void *pvParameters) {
                         rotateSensorFrame(currentFrame.temperatures, rotatedGrid, activeRot, effMirrorH, effMirrorV);
                     }
 
-                    // Dynamic scene auto-ranging:
-                    // Track robust percentiles (2nd & 98th) smoothly to eliminate single-pixel spikes while staying responsive
-                    static bool autoRangeInitialized = false;
-                    if (!autoRangeInitialized) {
-                        smoothedMin = currentFrame.robustMin;
-                        smoothedMax = currentFrame.robustMax;
-                        autoRangeInitialized = true;
-                    } else {
-                        smoothedMin += 0.20f * (currentFrame.robustMin - smoothedMin);
-                        smoothedMax += 0.20f * (currentFrame.robustMax - smoothedMax);
-                    }
-
-                    // Technique C: Auto-range floor clamping (5.0 deg C)
-                    // When scene thermal contrast is smaller than the floor, center the span symmetrically
-                    // around the scene mean temperature so low-contrast scenes don't over-amplify noise.
-                    float range = smoothedMax - smoothedMin;
-                    float effectiveMin = smoothedMin;
-                    if (range < THERMAL_MIN_RANGE_SPAN) {
-                        float mid = 0.5f * (smoothedMin + smoothedMax);
-                        range = THERMAL_MIN_RANGE_SPAN;
-                        effectiveMin = mid - 0.5f * range;
-                    }
+                    float range = 0.0f;
+                    float effectiveMin = 0.0f;
+                    computeEffectiveThermalRange(currentFrame.minTemp, currentFrame.maxTemp, effectiveMin, range);
                     float invRange = 255.0f / range;
 
                     // Execute thermal scaling directly into the thermalFrameBuffer
@@ -725,6 +745,8 @@ void displayTask(void *pvParameters) {
                     if (curState == APP_STATE_THERMAL_VIEW) {
                         updateThermalHUD(
                             currentFrame.centerTemp,
+                            currentFrame.minTemp,
+                            currentFrame.maxTemp,
                             effectiveMin,
                             effectiveMin + range,
                             currentFps,
@@ -784,13 +806,9 @@ void displayTask(void *pvParameters) {
                 bool effMirrorV = flipFeed ? !MIRROR_VERTICAL : MIRROR_VERTICAL;
                 rotateSensorFrame(snapshotRaw, rotatedGrid, activeRot, effMirrorH, effMirrorV);
 
-                float range = smoothedMax - smoothedMin;
-                float effectiveMin = smoothedMin;
-                if (range < THERMAL_MIN_RANGE_SPAN) {
-                    float mid = 0.5f * (smoothedMin + smoothedMax);
-                    range = THERMAL_MIN_RANGE_SPAN;
-                    effectiveMin = mid - 0.5f * range;
-                }
+                float range = 0.0f;
+                float effectiveMin = 0.0f;
+                computeEffectiveThermalRange(lastValidFrame.minTemp, lastValidFrame.maxTemp, effectiveMin, range);
                 float invRange = 255.0f / range;
 
                 scaler.render(
@@ -811,6 +829,8 @@ void displayTask(void *pvParameters) {
 
                 updateThermalHUD(
                     lastValidFrame.centerTemp,
+                    lastValidFrame.minTemp,
+                    lastValidFrame.maxTemp,
                     effectiveMin,
                     effectiveMin + range,
                     0.0f,

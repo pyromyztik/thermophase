@@ -35,7 +35,7 @@ void outPrintln(const char* str = "");
 // Live Thermal Frame BLE Streaming Controls
 bool isBLEStreaming();
 void setBLEStreaming(bool enable);
-void streamThermalFrameBLE(const float* temps, size_t count, float minTemp, float maxTemp, uint32_t frameIdx);
+void streamThermalFrameBLE(const float* temps, size_t count, float minTemp, float maxTemp, uint8_t rangeMode = 0, uint32_t frameIdx = 0);
 
 // Pulsed Phase Thermography (PPT) Asynchronous Spectral BLE Transmission
 void triggerPPTBLETransfer();

@@ -92,7 +92,6 @@ static void brightnessSliderEventCb(lv_event_t* e) {
         if (percent < 10) percent = 10;
         if (percent > 100) percent = 100;
 
-        setDisplayBrightness((uint8_t)percent);
         setDisplayBrightnessSetting((uint8_t)percent);
 
         if (brightness_val_label) {
@@ -145,7 +144,7 @@ static void brightnessBackBtnEventCb(lv_event_t* e) {
         if (brightness_back_label) lv_obj_set_style_text_color(brightness_back_label, UI_COLOR_TEXT_DIM, 0);
 
     } else if (code == LV_EVENT_CLICKED) {
-        uiNavToSettings(0); // Return to settings focused on option 0 (Brightness)
+        uiNavToSettings(SETTING_BRIGHTNESS); // Return to settings focused on Brightness
     }
 }
 

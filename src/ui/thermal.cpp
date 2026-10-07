@@ -35,6 +35,11 @@ static bool thermalIsFullscreen = false;
 // Snapshot Capture Flash Rectangle
 static lv_obj_t* snapshot_flash_rect = nullptr;
 
+// Thermal Range Progress Bar Overlay Widgets
+static lv_obj_t* range_pb_box = nullptr;
+static lv_obj_t* range_pb_bar = nullptr;
+static lv_obj_t* range_pb_label = nullptr;
+
 void uiTriggerSnapshotFlash() {
     if (snapshot_flash_rect == nullptr) return;
 
@@ -375,12 +380,120 @@ void buildThermalScreen() {
     lv_obj_clear_flag(snapshot_flash_rect, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_clear_flag(snapshot_flash_rect, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(snapshot_flash_rect, LV_OBJ_FLAG_HIDDEN);
+
+    // 7. Thermal Range Gesture Progress Bar Overlay (grows symmetrically from center)
+    // Box dimensions: 140x18 px, 1px white border (matching UI buttons), 75% black background
+    range_pb_box = lv_obj_create(screen_thermal);
+    lv_obj_set_size(range_pb_box, 140, 18);
+    lv_obj_set_pos(range_pb_box, (DISPLAY_WIDTH - 140) / 2, 195);
+    lv_obj_set_style_bg_color(range_pb_box, UI_COLOR_BG, 0);
+    lv_obj_set_style_bg_opa(range_pb_box, 191, 0); // 75% opacity
+    lv_obj_set_style_border_color(range_pb_box, UI_COLOR_BORDER, 0);
+    lv_obj_set_style_border_width(range_pb_box, 1, 0); // 1px white border matching UI buttons
+    lv_obj_set_style_radius(range_pb_box, 0, 0); // Square edges matching UI buttons
+    lv_obj_set_style_pad_all(range_pb_box, 0, 0);
+    lv_obj_clear_flag(range_pb_box, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Inner Red Bar that grows from center outwards
+    range_pb_bar = lv_obj_create(range_pb_box);
+    lv_obj_set_pos(range_pb_bar, 69, 0);
+    lv_obj_set_size(range_pb_bar, 0, 16);
+    lv_obj_set_style_bg_color(range_pb_bar, UI_COLOR_ACCENT, 0); // Red
+    lv_obj_set_style_bg_opa(range_pb_bar, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(range_pb_bar, 0, 0);
+    lv_obj_set_style_radius(range_pb_bar, 0, 0);
+    lv_obj_set_style_pad_all(range_pb_bar, 0, 0);
+    lv_obj_clear_flag(range_pb_bar, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Text label on progress bar
+    range_pb_label = lv_label_create(range_pb_box);
+    lv_label_set_text(range_pb_label, "THERMAL RANGE");
+    lv_obj_set_style_text_font(range_pb_label, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(range_pb_label, UI_COLOR_TEXT, 0);
+    lv_obj_center(range_pb_label);
+
+    lv_obj_set_style_opa(range_pb_box, LV_OPA_TRANSP, 0);
+    lv_obj_add_flag(range_pb_box, LV_OBJ_FLAG_HIDDEN);
+}
+
+static bool s_pb_visible = false;
+static bool s_pb_fading_out = false;
+
+static void pb_anim_opa_cb(void* var, int32_t val) {
+    lv_obj_set_style_opa((lv_obj_t*)var, (lv_opa_t)val, 0);
+}
+
+void showThermalRangeProgressBar(int currentTicks, int maxTicks) {
+    if (range_pb_box == nullptr || range_pb_bar == nullptr) return;
+    if (maxTicks <= 0) maxTicks = 10;
+    if (currentTicks < 0) currentTicks = 0;
+    if (currentTicks > maxTicks) currentTicks = maxTicks;
+
+    // Available inner width = 138 px (140 - 2*1px border)
+    constexpr int totalW = 138;
+    int fillW = (totalW * currentTicks) / maxTicks;
+    int posX = (totalW - fillW) / 2;
+
+    lv_obj_set_pos(range_pb_bar, posX, 0);
+    lv_obj_set_size(range_pb_bar, fillW, 16);
+
+    // If hidden or currently fading out, trigger quick fade in animation
+    if (!s_pb_visible || s_pb_fading_out) {
+        lv_anim_del(range_pb_box, NULL);
+        s_pb_fading_out = false;
+        s_pb_visible = true;
+        lv_obj_clear_flag(range_pb_box, LV_OBJ_FLAG_HIDDEN);
+
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, range_pb_box);
+        lv_anim_set_values(&a, lv_obj_get_style_opa(range_pb_box, 0), LV_OPA_COVER);
+        lv_anim_set_time(&a, 150); // Quick fade-in (150ms)
+        lv_anim_set_exec_cb(&a, pb_anim_opa_cb);
+        lv_anim_start(&a);
+    }
+}
+
+void hideThermalRangeProgressBar(bool animate) {
+    if (range_pb_box == nullptr) return;
+
+    if (!animate) {
+        lv_anim_del(range_pb_box, NULL);
+        s_pb_visible = false;
+        s_pb_fading_out = false;
+        lv_obj_set_style_opa(range_pb_box, LV_OPA_TRANSP, 0);
+        lv_obj_add_flag(range_pb_box, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    if (!s_pb_visible || s_pb_fading_out) return;
+
+    s_pb_fading_out = true;
+    lv_anim_del(range_pb_box, NULL);
+
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, range_pb_box);
+    lv_anim_set_values(&a, lv_obj_get_style_opa(range_pb_box, 0), LV_OPA_TRANSP);
+    lv_anim_set_time(&a, 250); // Smooth fade-out (250ms)
+    lv_anim_set_exec_cb(&a, pb_anim_opa_cb);
+    lv_anim_set_ready_cb(&a, [](lv_anim_t* anim) {
+        lv_obj_t* obj = (lv_obj_t*)anim->var;
+        if (obj) {
+            lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+        }
+        s_pb_visible = false;
+        s_pb_fading_out = false;
+    });
+    lv_anim_start(&a);
 }
 
 void updateThermalHUD(
     float centerTemp,
-    float minTemp,
-    float maxTemp,
+    float sensorMinTemp,
+    float sensorMaxTemp,
+    float colorMinTemp,
+    float colorMaxTemp,
     float fps,
     ScalingMode mode,
     TempUnit unit,
@@ -415,9 +528,6 @@ void updateThermalHUD(
         lv_obj_set_pos(thermal_reticle_container, cx - 7, cy - 7);
     }
 
-    const char* modeNames[5] = {"NEAR", "BILIN", "BICUB", "LANCZ", "TAAU"};
-    const char* uSym = getUnitSym(unit);
-
     // Only update static colorbar canvas when palette actually changes
     static const uint16_t* lastRenderedPalette = nullptr;
     if (vpX > 0 && activePalette != nullptr && activePalette != lastRenderedPalette) {
@@ -451,6 +561,9 @@ void updateThermalHUD(
                 if (isFrozen) {
                     lv_label_set_text(title_thm, "[HOLD]");
                     lv_obj_set_style_text_color(title_thm, UI_COLOR_CYAN, 0);
+                } else if (getThermalRangeModeSetting() == THERMAL_RANGE_MANUAL) {
+                    lv_label_set_text(title_thm, "MANUAL");
+                    lv_obj_set_style_text_color(title_thm, UI_COLOR_ACCENT, 0);
                 } else {
                     lv_label_set_text(title_thm, "THERMAL");
                     lv_obj_set_style_text_color(title_thm, UI_COLOR_YELLOW, 0);
@@ -475,19 +588,15 @@ void updateThermalHUD(
 
             // Update Side Panels
             char buf[32];
-            if (unit == TEMP_UNIT_KELVIN) {
-                snprintf(buf, sizeof(buf), "%.1f", convertTemp(centerTemp, unit));
-            } else {
-                snprintf(buf, sizeof(buf), "%.1f" UI_SYMBOL_DEGREE, convertTemp(centerTemp, unit));
-            }
+            formatTempStr(buf, sizeof(buf), centerTemp, unit, 1, false);
             lv_label_set_text(label_center_temp, buf);
 
             lv_label_set_text(label_temp_unit, getUnitFullName(unit));
 
-            snprintf(buf, sizeof(buf), "%.1f %s", convertTemp(minTemp, unit), uSym);
+            formatTempStr(buf, sizeof(buf), sensorMinTemp, unit, 1, true);
             lv_label_set_text(label_min_temp, buf);
 
-            snprintf(buf, sizeof(buf), "%.1f %s", convertTemp(maxTemp, unit), uSym);
+            formatTempStr(buf, sizeof(buf), sensorMaxTemp, unit, 1, true);
             lv_label_set_text(label_max_temp, buf);
 
             if (isFrozen) {
@@ -499,28 +608,16 @@ void updateThermalHUD(
                 lv_obj_set_style_text_color(label_fps, UI_COLOR_GREEN, 0);
             }
 
-            lv_label_set_text(label_scaling_mode, modeNames[mode % 5]);
+            lv_label_set_text(label_scaling_mode, getScalingModeShortName(mode));
 
-            if (unit == TEMP_UNIT_KELVIN) {
-                snprintf(buf, sizeof(buf), "%.0f", convertTemp(maxTemp, unit));
-            } else {
-                snprintf(buf, sizeof(buf), "%.0f" UI_SYMBOL_DEGREE, convertTemp(maxTemp, unit));
-            }
+            formatTempStr(buf, sizeof(buf), colorMaxTemp, unit, 0, false);
             lv_label_set_text(label_colorbar_max, buf);
 
-            float midTemp = 0.5f * (minTemp + maxTemp);
-            if (unit == TEMP_UNIT_KELVIN) {
-                snprintf(buf, sizeof(buf), "%.0f", convertTemp(midTemp, unit));
-            } else {
-                snprintf(buf, sizeof(buf), "%.0f" UI_SYMBOL_DEGREE, convertTemp(midTemp, unit));
-            }
+            float midTemp = 0.5f * (colorMinTemp + colorMaxTemp);
+            formatTempStr(buf, sizeof(buf), midTemp, unit, 0, false);
             lv_label_set_text(label_colorbar_mid, buf);
 
-            if (unit == TEMP_UNIT_KELVIN) {
-                snprintf(buf, sizeof(buf), "%.0f", convertTemp(minTemp, unit));
-            } else {
-                snprintf(buf, sizeof(buf), "%.0f" UI_SYMBOL_DEGREE, convertTemp(minTemp, unit));
-            }
+            formatTempStr(buf, sizeof(buf), colorMinTemp, unit, 0, false);
             lv_label_set_text(label_colorbar_min, buf);
         }
     }

@@ -2,6 +2,7 @@
 #include "diagnostics.hpp"
 #include "ppt.hpp"
 #include "ble.hpp"
+#include "ui.hpp"
 #include <esp_timer.h>
 #include <algorithm>
 #include <cmath>
@@ -249,6 +250,8 @@ bool getLiveDenoiseEnabled() {
 // For normal pixels, applies the exact 3x3 median (eliminating high-frequency noise and checkerboard dither).
 // When a genuine isolated thermal hotspot (e.g. tiny SMD resistor or pinpoint heat source) exceeds the local
 // median by more than peakThreshold, the true peak temperature is preserved instead of being treated as noise.
+// Genuine cold spots (with spatial confirmation) are likewise preserved, while single-pixel dead cold/hot pixels
+// are cleanly replaced by the median.
 void filterPeakPreservingMedian(const float* src, float* dst, float peakThreshold) {
     float window[9];
     for (int r = 0; r < SENSOR_HEIGHT; ++r) {
@@ -269,8 +272,45 @@ void filterPeakPreservingMedian(const float* src, float* dst, float peakThreshol
 
             float diff = centerVal - medianVal;
             if (diff > peakThreshold) {
-                // True isolated thermal hotspot: preserve the real peak temperature
-                dst[r * SENSOR_WIDTH + c] = centerVal;
+                // Hot feature: check if it's an extreme isolated single-pixel defect
+                // (e.g. >12°C above median with zero neighbors showing any elevation)
+                bool isHotDefect = false;
+                if (diff > 12.0f) {
+                    bool anyWarmNeighbor = false;
+                    for (int dr = -1; dr <= 1 && !anyWarmNeighbor; ++dr) {
+                        int nr = r + dr;
+                        if (nr < 0 || nr >= SENSOR_HEIGHT) continue;
+                        for (int dc = -1; dc <= 1 && !anyWarmNeighbor; ++dc) {
+                            if (dr == 0 && dc == 0) continue;
+                            int nc = c + dc;
+                            if (nc < 0 || nc >= SENSOR_WIDTH) continue;
+                            if (src[nr * SENSOR_WIDTH + nc] > medianVal + 0.6f) {
+                                anyWarmNeighbor = true;
+                            }
+                        }
+                    }
+                    if (!anyWarmNeighbor) isHotDefect = true;
+                }
+                dst[r * SENSOR_WIDTH + c] = isHotDefect ? medianVal : centerVal;
+            } else if (diff < -peakThreshold) {
+                // Cold feature: check if it is a physical cold spot (ice, cold draft)
+                // vs an isolated dead/corrupted cold pixel.
+                // An isolated dead cold pixel will have all neighbors at normal temperature.
+                // A true physical cold object will show at least one neighbor also cooler than ambient.
+                bool confirmedCold = false;
+                for (int dr = -1; dr <= 1 && !confirmedCold; ++dr) {
+                    int nr = r + dr;
+                    if (nr < 0 || nr >= SENSOR_HEIGHT) continue;
+                    for (int dc = -1; dc <= 1 && !confirmedCold; ++dc) {
+                        if (dr == 0 && dc == 0) continue;
+                        int nc = c + dc;
+                        if (nc < 0 || nc >= SENSOR_WIDTH) continue;
+                        if (src[nr * SENSOR_WIDTH + nc] < medianVal - 0.6f) {
+                            confirmedCold = true;
+                        }
+                    }
+                }
+                dst[r * SENSOR_WIDTH + c] = confirmedCold ? centerVal : medianVal;
             } else {
                 // Sensor noise / checkerboard dither / uniform area: exact 3x3 median
                 dst[r * SENSOR_WIDTH + c] = medianVal;
@@ -288,11 +328,18 @@ void thermalSensorTask(void *pvParameters) {
     }
     localFrame.frameIndex = 0;
     int consecutiveErrors = 0;
+    static float s_smoothedMin = 20.0f;
+    static float s_smoothedMax = 30.0f;
+    static bool s_minMaxInitialized = false;
+    static float smoothedCenter = 25.0f;
+    static bool centerInitialized = false;
 
     while (true) {
         // Handle disconnected state: attempt periodic auto-reconnection
         if (globalSensorStatus != SENSOR_OK) {
             sensorReconnectAttempts++;
+            s_minMaxInitialized = false;
+            centerInitialized = false;
             vTaskDelay(pdMS_TO_TICKS(1000));
 
             Serial.printf("[MLX90640] Reconnect attempt #%u...\n", sensorReconnectAttempts);
@@ -316,6 +363,8 @@ void thermalSensorTask(void *pvParameters) {
                 globalSensorStatus = SENSOR_OK;
                 consecutiveErrors = 0;
                 sensorReconnectAttempts = 0;
+                s_minMaxInitialized = false;
+                centerInitialized = false;
                 Serial.println("[MLX90640] SUCCESS: Thermal sensor reconnected!");
             }
             continue;
@@ -374,21 +423,29 @@ void thermalSensorTask(void *pvParameters) {
                 localFrame.temperatures[i] += frameCorrection;
             }
 
-            // 2. Compute absolute min/max and robust percentiles (2nd & 98th) to discard outliers/bad pixels
-            float tMin = 1000.0f;
-            float tMax = -1000.0f;
+            // 2. Spatial noise filtering and outlier rejection for stable, accurate telemetry
+            static float spatiallyFilteredGrid[SENSOR_PIXELS];
+            filterPeakPreservingMedian(localFrame.temperatures, spatiallyFilteredGrid);
+
+            // Compute raw min/max and collect valid temperatures from the spatially validated frame
+            float rawMin = 1000.0f;
+            float rawMax = -1000.0f;
             static float sortedTemps[SENSOR_PIXELS];
             int validCount = 0;
 
             for (size_t i = 0; i < SENSOR_PIXELS; ++i) {
-                float val = localFrame.temperatures[i];
-                if (std::isfinite(val) && val > -50.0f && val < 400.0f) {
-                    if (val < tMin) tMin = val;
-                    if (val > tMax) tMax = val;
+                float val = spatiallyFilteredGrid[i];
+                if (std::isfinite(val) && val > -40.0f && val < 350.0f) {
+                    if (val < rawMin) rawMin = val;
+                    if (val > rawMax) rawMax = val;
                     sortedTemps[validCount++] = val;
                 }
             }
 
+            if (rawMin > 500.0f) rawMin = 20.0f;
+            if (rawMax < -500.0f) rawMax = 30.0f;
+
+            // 3. Robust percentiles (2nd & 98th) for dynamic palette auto-ranging
             if (validCount > 64) {
                 // Discard lowest 2% (index ~15) and highest 2% (index ~validCount - 16)
                 int pLowIdx = validCount * 2 / 100;
@@ -402,19 +459,17 @@ void thermalSensorTask(void *pvParameters) {
                 std::nth_element(sortedTemps + pLowIdx + 1, sortedTemps + pHighIdx, sortedTemps + validCount);
                 localFrame.robustMax = sortedTemps[pHighIdx];
             } else {
-                localFrame.robustMin = (tMin < 500.0f) ? tMin : 20.0f;
-                localFrame.robustMax = (tMax > -500.0f) ? tMax : 30.0f;
+                localFrame.robustMin = rawMin;
+                localFrame.robustMax = rawMax;
             }
 
             // 4. Calculate center spot temperature with temporal smoothing (alpha = 0.25)
-            float c0 = localFrame.temperatures[11 * SENSOR_WIDTH + 15];
-            float c1 = localFrame.temperatures[11 * SENSOR_WIDTH + 16];
-            float c2 = localFrame.temperatures[12 * SENSOR_WIDTH + 15];
-            float c3 = localFrame.temperatures[12 * SENSOR_WIDTH + 16];
+            float c0 = spatiallyFilteredGrid[11 * SENSOR_WIDTH + 15];
+            float c1 = spatiallyFilteredGrid[11 * SENSOR_WIDTH + 16];
+            float c2 = spatiallyFilteredGrid[12 * SENSOR_WIDTH + 15];
+            float c3 = spatiallyFilteredGrid[12 * SENSOR_WIDTH + 16];
             float rawCenter = (c0 + c1 + c2 + c3) * 0.25f;
 
-            static float smoothedCenter = 25.0f;
-            static bool centerInitialized = false;
             if (!centerInitialized) {
                 smoothedCenter = rawCenter;
                 centerInitialized = true;
@@ -425,16 +480,51 @@ void thermalSensorTask(void *pvParameters) {
             }
             localFrame.centerTemp = smoothedCenter;
 
-            localFrame.minTemp = tMin;
-            localFrame.maxTemp = tMax;
+            // 5. Adaptive dual-rate temporal smoothing for displayed Min / Max telemetry:
+            // - Static scenes (< 0.5°C deltas): EMA alpha = 0.20 eliminates HUD digit jitter
+            // - Panning / scene transition (0.5°C to 2.5°C): alpha = 0.70 for fast tracking
+            // - Large step (> 2.5°C, new object entering frame): alpha = 1.0 (instant snap)
+            if (!s_minMaxInitialized) {
+                s_smoothedMin = rawMin;
+                s_smoothedMax = rawMax;
+                s_minMaxInitialized = true;
+            } else {
+                float dMax = rawMax - s_smoothedMax;
+                float absDMax = std::abs(dMax);
+                float aMax = 0.20f;
+                if (absDMax > 2.5f) {
+                    aMax = 1.0f;
+                } else if (absDMax > 0.5f) {
+                    aMax = 0.70f;
+                }
+                s_smoothedMax += aMax * dMax;
+
+                float dMin = rawMin - s_smoothedMin;
+                float absDMin = std::abs(dMin);
+                float aMin = 0.20f;
+                if (absDMin > 2.5f) {
+                    aMin = 1.0f;
+                } else if (absDMin > 0.5f) {
+                    aMin = 0.70f;
+                }
+                s_smoothedMin += aMin * dMin;
+            }
+
+            localFrame.minTemp = s_smoothedMin;
+            localFrame.maxTemp = s_smoothedMax;
             localFrame.frameIndex++;
 
             postThermalFrame(localFrame);
 
             // Stream over BLE if streaming is active and BLE is connected
             if (isBLEStreaming() && isBLEConnected()) {
+                float effMin = 0.0f;
+                float effRange = 0.0f;
+                computeEffectiveThermalRange(localFrame.minTemp, localFrame.maxTemp, effMin, effRange);
+                uint8_t rangeMode = (uint8_t)getThermalRangeModeSetting();
                 streamThermalFrameBLE(localFrame.temperatures, SENSOR_PIXELS,
-                                      localFrame.minTemp, localFrame.maxTemp,
+                                      effMin, effMin + effRange,
+                                      rangeMode,
                                       localFrame.frameIndex);
             }
 

@@ -34,6 +34,9 @@ void loadSettings() {
     bool rgbEnabled = prefs.getBool("rgb_led", true);
     bool liveDenoise = prefs.getBool("live_denoise", true);
     bool bleEnabled = prefs.getBool("ble_enabled", true);
+    uint8_t rangeMode = prefs.getUChar("range_mode", (uint8_t)THERMAL_RANGE_AUTO);
+    float manMin = prefs.getFloat("man_min", 20.0f);
+    float manMax = prefs.getFloat("man_max", 50.0f);
     prefs.end();
 
     // Clamp & sanitize values against potential flash corruption
@@ -43,8 +46,11 @@ void loadSettings() {
     if (pal > 2) pal = (uint8_t)PALETTE_IRONBOW;
     if (scale > 4) scale = (uint8_t)SCALING_BICUBIC;
     if (i2cSpd != I2C_SPEED_400K && i2cSpd != I2C_SPEED_800K) i2cSpd = I2C_SPEED_800K;
+    if (rangeMode > 1) rangeMode = (uint8_t)THERMAL_RANGE_AUTO;
+    if (manMin < -40.0f || manMin > 200.0f) manMin = 20.0f;
+    if (manMax < -30.0f || manMax > 300.0f || manMax <= manMin + 1.0f) manMax = manMin + 30.0f;
 
-    // Apply to UI runtime state
+    // Apply to UI and hardware engines atomically
     setDisplayBrightnessSetting(bright);
     setDisplayRotationSetting(dispRot);
     setTempUnitSetting((TempUnit)unit);
@@ -54,26 +60,14 @@ void loadSettings() {
     setI2CSpeedSetting(i2cSpd);
     setRgbLedEnabledSetting(rgbEnabled);
     setLiveDenoiseSetting(liveDenoise);
-    setLiveDenoiseEnabled(liveDenoise);
     setBLEEnabledSetting(bleEnabled);
-
-    // Apply to Display engine
-    setDisplayBrightness(bright);
-    setDisplayRotation(dispRot);
-    updateTempUnit((TempUnit)unit);
-    updatePalette((PaletteType)pal);
-    updateMirror(mirror);
-    updateScalingMode((ScalingMode)scale);
-
-    // Apply to Sensor engine
-    setSensorI2CSpeed(i2cSpd);
-
-    // Apply to BLE engine
-    setBLEEnabled(bleEnabled);
+    setThermalRangeModeSetting((ThermalRangeMode)rangeMode);
+    setManualMinTempSetting(manMin);
+    setManualMaxTempSetting(manMax);
 
     settingsDirty = false;
-    Serial.printf("[STORAGE] Loaded settings from NVS -> Brightness: %d%%, Rotation: %s, Unit: %d, Palette: %d, Mirror: %d, Scaling: %d, I2C: %lu Hz, RGB: %s, BLE: %s\n",
-                  bright, (dispRot == 1) ? "180" : "Normal", unit, pal, mirror ? 1 : 0, scale, i2cSpd, rgbEnabled ? "ON" : "OFF", bleEnabled ? "ON" : "OFF");
+    Serial.printf("[STORAGE] Loaded settings from NVS -> Brightness: %d%%, Rotation: %s, Unit: %d, Palette: %d, Mirror: %d, Scaling: %d, I2C: %lu Hz, RGB: %s, BLE: %s, Range: %s (%.1f-%.1f C)\n",
+                  bright, (dispRot == 1) ? "180" : "Normal", unit, pal, mirror ? 1 : 0, scale, i2cSpd, rgbEnabled ? "ON" : "OFF", bleEnabled ? "ON" : "OFF", (rangeMode == 1) ? "MANUAL" : "AUTO", manMin, manMax);
 }
 
 void saveSettingsIfDirty() {
@@ -97,6 +91,9 @@ void saveSettingsIfDirty() {
     prefs.putBool("rgb_led", getRgbLedEnabledSetting());
     prefs.putBool("live_denoise", getLiveDenoiseSetting());
     prefs.putBool("ble_enabled", getBLEEnabledSetting());
+    prefs.putUChar("range_mode", (uint8_t)getThermalRangeModeSetting());
+    prefs.putFloat("man_min", getManualMinTempSetting());
+    prefs.putFloat("man_max", getManualMaxTempSetting());
     prefs.end();
 
     settingsDirty = false;
@@ -111,7 +108,7 @@ void resetSettingsToDefaults() {
         Serial.println("[STORAGE] NVS preferences partition cleared.");
     }
 
-    // Apply defaults to UI runtime state
+    // Apply defaults to UI and hardware engines atomically
     setDisplayBrightnessSetting(TFT_DEFAULT_BRIGHTNESS);
     setDisplayRotationSetting(DISPLAY_ROTATION);
     setTempUnitSetting(TEMP_UNIT_CELSIUS);
@@ -121,22 +118,10 @@ void resetSettingsToDefaults() {
     setI2CSpeedSetting(I2C_SPEED_800K);
     setRgbLedEnabledSetting(true);
     setLiveDenoiseSetting(true);
-    setLiveDenoiseEnabled(true);
     setBLEEnabledSetting(true);
-
-    // Apply to Display engine
-    setDisplayBrightness(TFT_DEFAULT_BRIGHTNESS);
-    setDisplayRotation(DISPLAY_ROTATION);
-    updateTempUnit(TEMP_UNIT_CELSIUS);
-    updatePalette(PALETTE_IRONBOW);
-    updateMirror(MIRROR_HORIZONTAL);
-    updateScalingMode(SCALING_BICUBIC);
-
-    // Apply to Sensor engine
-    setSensorI2CSpeed(I2C_SPEED_800K);
-
-    // Apply to BLE engine
-    setBLEEnabled(true);
+    setThermalRangeModeSetting(THERMAL_RANGE_AUTO);
+    setManualMinTempSetting(20.0f);
+    setManualMaxTempSetting(50.0f);
 
     settingsDirty = false;
     Serial.println("[STORAGE] All settings restored to factory defaults.");

@@ -21,6 +21,9 @@ static uint32_t currentI2CSpeedSetting = I2C_FREQ_RUN;
 static bool currentRgbLedSetting = true;
 static bool currentLiveDenoiseSetting = true;
 static bool currentBLESetting = true;
+static ThermalRangeMode currentThermalRangeMode = THERMAL_RANGE_AUTO;
+static float manualMinTemp = 20.0f;
+static float manualMaxTemp = 50.0f;
 
 // Screen pointers
 lv_obj_t* screen_boot = nullptr;
@@ -449,6 +452,7 @@ void initUI() {
     buildBrightnessScreen();
     buildScalingScreen();
     buildResetScreen();
+    buildThermalRangeScreen();
     buildErrorScreen();
 
     // Initial state: Boot Screen
@@ -483,30 +487,35 @@ uint8_t getDisplayRotationSetting() { return currentDisplayRotationSetting; }
 void setTempUnitSetting(TempUnit unit) {
     if (currentTempUnitSetting != unit) {
         currentTempUnitSetting = unit;
+        updateTempUnit(unit);
         markSettingsDirty();
     }
 }
 void setPaletteSetting(PaletteType pal) {
     if (currentPaletteSetting != pal) {
         currentPaletteSetting = pal;
+        updatePalette(pal);
         markSettingsDirty();
     }
 }
 void setMirrorSetting(bool mirror) {
     if (currentMirrorSetting != mirror) {
         currentMirrorSetting = mirror;
+        updateMirror(mirror);
         markSettingsDirty();
     }
 }
 void setScalingModeSetting(ScalingMode mode) {
     if (currentScalingSetting != mode) {
         currentScalingSetting = mode;
+        updateScalingMode(mode);
         markSettingsDirty();
     }
 }
 void setDisplayBrightnessSetting(uint8_t percent) {
     if (currentBrightnessSetting != percent) {
         currentBrightnessSetting = percent;
+        setDisplayBrightness(percent);
         markSettingsDirty();
     }
 }
@@ -563,6 +572,33 @@ void setBLEEnabledSetting(bool enabled) {
         updateBatteryUI(true);
     }
 }
+ThermalRangeMode getThermalRangeModeSetting() {
+    return currentThermalRangeMode;
+}
+void setThermalRangeModeSetting(ThermalRangeMode mode) {
+    if (currentThermalRangeMode != mode) {
+        currentThermalRangeMode = mode;
+        markSettingsDirty();
+    }
+}
+float getManualMinTempSetting() {
+    return manualMinTemp;
+}
+void setManualMinTempSetting(float minC) {
+    if (manualMinTemp != minC) {
+        manualMinTemp = minC;
+        markSettingsDirty();
+    }
+}
+float getManualMaxTempSetting() {
+    return manualMaxTemp;
+}
+void setManualMaxTempSetting(float maxC) {
+    if (manualMaxTemp != maxC) {
+        manualMaxTemp = maxC;
+        markSettingsDirty();
+    }
+}
 
 // Temperature conversion helpers
 float convertTemp(float tempC, TempUnit unit) {
@@ -584,6 +620,67 @@ const char* getUnitFullName(TempUnit unit) {
     if (unit == TEMP_UNIT_FAHRENHEIT) return "Fahrenheit";
     if (unit == TEMP_UNIT_KELVIN) return "Kelvin";
     return "Celsius";
+}
+
+void computeEffectiveThermalRange(float sceneMin, float sceneMax, float& outEffectiveMin, float& outRange) {
+    if (getThermalRangeModeSetting() == THERMAL_RANGE_MANUAL) {
+        float manualMin = getManualMinTempSetting();
+        float manualMax = getManualMaxTempSetting();
+        if (manualMax <= manualMin + 1.0f) {
+            manualMax = manualMin + 1.0f;
+        }
+        outEffectiveMin = manualMin;
+        outRange = manualMax - manualMin;
+    } else {
+        float span = sceneMax - sceneMin;
+        if (span < THERMAL_MIN_RANGE_SPAN) {
+            float mid = 0.5f * (sceneMin + sceneMax);
+            outRange = THERMAL_MIN_RANGE_SPAN;
+            outEffectiveMin = mid - 0.5f * THERMAL_MIN_RANGE_SPAN;
+        } else {
+            outEffectiveMin = sceneMin;
+            outRange = span;
+        }
+    }
+}
+
+void formatTempStr(char* buf, size_t bufSize, float tempC, TempUnit unit, int decimals, bool includeUnit) {
+    float val = convertTemp(tempC, unit);
+    const char* sym = getUnitSym(unit);
+    if (unit == TEMP_UNIT_KELVIN) {
+        if (includeUnit) {
+            if (decimals == 0) snprintf(buf, bufSize, "%.0f K", val);
+            else snprintf(buf, bufSize, "%.1f K", val);
+        } else {
+            if (decimals == 0) snprintf(buf, bufSize, "%.0f", val);
+            else snprintf(buf, bufSize, "%.1f", val);
+        }
+    } else {
+        if (includeUnit) {
+            if (decimals == 0) snprintf(buf, bufSize, "%.0f %s", val, sym);
+            else snprintf(buf, bufSize, "%.1f %s", val, sym);
+        } else {
+            if (decimals == 0) snprintf(buf, bufSize, "%.0f" UI_SYMBOL_DEGREE, val);
+            else snprintf(buf, bufSize, "%.1f" UI_SYMBOL_DEGREE, val);
+        }
+    }
+}
+
+const char* getScalingModeShortName(ScalingMode mode) {
+    static const char* const s_names[5] = {"NEAR", "BILIN", "BICUB", "LANCZ", "TAAU"};
+    return s_names[(int)mode % 5];
+}
+
+const char* getScalingModeLongName(ScalingMode mode) {
+    static const char* const s_longNames[5] = {
+        "Nearest Neighbor", "Bilinear", "Bicubic (Catmull-Rom)", "Lanczos-3", "TAAU (Temporal AA)"
+    };
+    return s_longNames[(int)mode % 5];
+}
+
+const char* getPaletteName(PaletteType pal) {
+    static const char* const s_palNames[3] = {"Ironbow", "White-Hot", "Rainbow"};
+    return s_palNames[(int)pal % 3];
 }
 
 // -------------------------------------------------------------
@@ -662,7 +759,7 @@ void uiNavToMainMenu() {
     }
 
     // Persist settings if exiting Settings or its dedicated sub-pages
-    if (prevState == APP_STATE_SETTINGS || prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS || prevState == APP_STATE_RESET_CONFIRM) {
+    if (prevState == APP_STATE_SETTINGS || prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS || prevState == APP_STATE_RESET_CONFIRM || prevState == APP_STATE_THERMAL_RANGE) {
         saveSettingsIfDirty();
     }
 
@@ -676,7 +773,7 @@ void uiNavToMainMenu() {
     WheelEventType dummy;
     while (getWheelEvent(dummy, 0)) { }
 
-    if (prevState == APP_STATE_SETTINGS || prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS || prevState == APP_STATE_RESET_CONFIRM) {
+    if (prevState == APP_STATE_SETTINGS || prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS || prevState == APP_STATE_RESET_CONFIRM || prevState == APP_STATE_THERMAL_RANGE) {
         // Between menu screens: fast slide transition (100ms)
         lv_scr_load_anim(screen_main_menu, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 100, 0, false);
     } else {
@@ -704,7 +801,7 @@ void uiNavToSettings(int focusIndex) {
     }
     lv_group_focus_obj(settingsBtns[focusIndex]);
     if (settings_desc_label != nullptr) {
-        if (focusIndex == 8) {
+        if (focusIndex == SETTING_BLUETOOTH) {
             char bleDesc[140];
             if (!getBLEEnabledSetting()) {
                 snprintf(bleDesc, sizeof(bleDesc), "Bluetooth is OFF (saves ~35-45 mA / ~12%% battery). Click to enable wireless telemetry.");
@@ -730,7 +827,7 @@ void uiNavToSettings(int focusIndex) {
     WheelEventType dummy;
     while (getWheelEvent(dummy, 0)) { }
 
-    if (prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS || prevState == APP_STATE_RESET_CONFIRM) {
+    if (prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS || prevState == APP_STATE_RESET_CONFIRM || prevState == APP_STATE_THERMAL_RANGE) {
         // Subpage back to settings: slide right
         lv_scr_load_anim(screen_settings, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 100, 0, false);
     } else {
@@ -802,6 +899,28 @@ void uiNavToScalingMenu() {
     // Slide left into subpage
     lv_scr_load_anim(screen_scaling, LV_SCR_LOAD_ANIM_MOVE_LEFT, 100, 0, false);
     Serial.println("[UI] Transitioned to Scaling Menu (100ms Slide)");
+}
+
+static AppState s_rangeCaller = APP_STATE_THERMAL_VIEW;
+
+void uiNavToThermalRange(AppState caller) {
+    s_rangeCaller = caller;
+    AppState prevState = currentAppState;
+    currentAppState = APP_STATE_THERMAL_RANGE;
+    lv_group_remove_all_objs(ui_wheel_group);
+
+    setupThermalRangeGroup();
+
+    WheelEventType dummy;
+    while (getWheelEvent(dummy, 0)) { }
+
+    // Slide left into thermal range subpage
+    lv_scr_load_anim(screen_thermal_range, LV_SCR_LOAD_ANIM_MOVE_LEFT, 100, 0, false);
+    Serial.println("[UI] Transitioned to Thermal Range Menu (100ms Slide)");
+}
+
+AppState getThermalRangeCaller() {
+    return s_rangeCaller;
 }
 
 void uiNavToSensorError(uint32_t attemptCount) {

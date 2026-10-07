@@ -405,26 +405,14 @@ void updatePPTScreenArmed(
 
     if (maxTemp > minTemp) {
         char tbuf[16];
-        if (unit == TEMP_UNIT_KELVIN) {
-            snprintf(tbuf, sizeof(tbuf), "%.0f", convertTemp(maxTemp, unit));
-        } else {
-            snprintf(tbuf, sizeof(tbuf), "%.0f" UI_SYMBOL_DEGREE, convertTemp(maxTemp, unit));
-        }
+        formatTempStr(tbuf, sizeof(tbuf), maxTemp, unit, 0, false);
         lv_label_set_text(ppt_lbl_cb_max, tbuf);
 
         float midTemp = 0.5f * (minTemp + maxTemp);
-        if (unit == TEMP_UNIT_KELVIN) {
-            snprintf(tbuf, sizeof(tbuf), "%.0f", convertTemp(midTemp, unit));
-        } else {
-            snprintf(tbuf, sizeof(tbuf), "%.0f" UI_SYMBOL_DEGREE, convertTemp(midTemp, unit));
-        }
+        formatTempStr(tbuf, sizeof(tbuf), midTemp, unit, 0, false);
         lv_label_set_text(ppt_lbl_cb_mid, tbuf);
 
-        if (unit == TEMP_UNIT_KELVIN) {
-            snprintf(tbuf, sizeof(tbuf), "%.0f", convertTemp(minTemp, unit));
-        } else {
-            snprintf(tbuf, sizeof(tbuf), "%.0f" UI_SYMBOL_DEGREE, convertTemp(minTemp, unit));
-        }
+        formatTempStr(tbuf, sizeof(tbuf), minTemp, unit, 0, false);
         lv_label_set_text(ppt_lbl_cb_min, tbuf);
     }
 
@@ -524,8 +512,7 @@ void updatePPTScreenInspect(
     lv_label_set_text(ppt_lbl_depth_hdr, "DEPTH");
     lv_label_set_text(ppt_lbl_depth_val, depthDesc);
 
-    const char* modeNames[5] = {"NEAR", "BILIN", "BICUB", "LANCZ", "TAAU"};
-    lv_label_set_text(ppt_lbl_scaler, modeNames[mode % 5]);
+    lv_label_set_text(ppt_lbl_scaler, getScalingModeShortName(mode));
 
     // Update colorbar canvas if palette changed
     static const uint16_t* lastRenderedPalette = nullptr;

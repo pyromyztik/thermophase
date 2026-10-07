@@ -41,15 +41,15 @@ static void resetBtnEventCb(lv_event_t* e) {
         }
     } else if (code == LV_EVENT_CLICKED) {
         if (idx == 0) {
-            // Cancel -> Return to Settings screen focused on Factory Reset (index 9)
+            // Cancel -> Return to Settings screen focused on Factory Reset
             Serial.println("[UI] Factory Reset cancelled.");
-            uiNavToSettings(9);
+            uiNavToSettings(SETTING_FACTORY_RESET);
         } else if (idx == 1) {
             // Confirm Reset -> restore defaults and return to Settings
             Serial.println("[UI] Factory Reset confirmed by user!");
             resetSettingsToDefaults();
             updateSettingsValues();
-            uiNavToSettings(9);
+            uiNavToSettings(SETTING_FACTORY_RESET);
         }
     }
 }

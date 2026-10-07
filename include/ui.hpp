@@ -14,10 +14,17 @@ enum AppState {
     APP_STATE_BRIGHTNESS,       // Dedicated display backlight brightness slider screen
     APP_STATE_SCALING_MENU,     // Dedicated scaling / interpolation mode select screen
     APP_STATE_RESET_CONFIRM,    // Factory reset confirmation dialogue screen
+    APP_STATE_THERMAL_RANGE,    // Thermal range mode and span configuration screen
     APP_STATE_SENSOR_ERROR,     // Hardware disconnected / sensor error screen
     APP_STATE_PPT_ARMED,        // PPT Armed, awaiting thermal pulse trigger
     APP_STATE_PPT_ACQUIRING,    // PPT Recording 64 frames
     APP_STATE_PPT_INSPECT       // PPT Phase depth slicing & frequency sweep
+};
+
+// Thermal Range Modes (Automatic vs Manual temperature span clamping)
+enum ThermalRangeMode {
+    THERMAL_RANGE_AUTO = 0,
+    THERMAL_RANGE_MANUAL = 1
 };
 
 // Temperature Unit Options
@@ -81,12 +88,28 @@ extern lv_obj_t* screen_settings;
 extern lv_obj_t* screen_brightness;
 extern lv_obj_t* screen_scaling;
 extern lv_obj_t* screen_reset;
+extern lv_obj_t* screen_thermal_range;
 extern lv_obj_t* screen_error;
 
 // Screen item counts
 constexpr int MAIN_MENU_COUNT = 5;
-constexpr int SETTINGS_COUNT = 11;
 constexpr int SCALING_OPTIONS_COUNT = 7;
+
+enum SettingItemIndex {
+    SETTING_BRIGHTNESS = 0,
+    SETTING_ORIENTATION = 1,
+    SETTING_MIRROR = 2,
+    SETTING_PALETTE = 3,
+    SETTING_UPSCALING = 4,
+    SETTING_TEMP_UNIT = 5,
+    SETTING_THERMAL_RANGE = 6,
+    SETTING_I2C_CLOCK = 7,
+    SETTING_RGB_LED = 8,
+    SETTING_BLUETOOTH = 9,
+    SETTING_FACTORY_RESET = 10,
+    SETTING_BACK = 11,
+    SETTINGS_COUNT = 12
+};
 
 // Bluetooth Icon Font & Symbol
 #define UI_SYMBOL_BLUETOOTH "\xEE\x80\x80"
@@ -133,10 +156,16 @@ void uiNavToSettings(int focusIndex = 0);
 void uiNavToBrightness();
 void uiNavToScalingMenu();
 void uiNavToResetConfirm();
+void uiNavToThermalRange(AppState caller = APP_STATE_THERMAL_VIEW);
+AppState getThermalRangeCaller();
 void uiNavToSensorError(uint32_t attemptCount);
 void uiDismissSensorError();
 void uiNavToPPT();
 bool isPPTArmedCooldown();
+
+// Thermal Range Knob Gesture Progress Bar Overlay
+void showThermalRangeProgressBar(int currentTicks, int maxTicks);
+void hideThermalRangeProgressBar(bool animate = true);
 
 // Screen Builders
 void buildBootScreen();
@@ -148,6 +177,8 @@ void buildBrightnessScreen();
 void buildScalingScreen();
 void buildResetScreen();
 void setupResetGroup();
+void buildThermalRangeScreen();
+void setupThermalRangeGroup();
 void buildErrorScreen();
 void refreshMainMenuBLEState(bool resetFocus = false);
 
@@ -155,8 +186,10 @@ void refreshMainMenuBLEState(bool resetFocus = false);
 void updateBootScreenUI(const char* statusText, uint8_t progressPercent);
 void updateThermalHUD(
     float centerTemp,
-    float minTemp,
-    float maxTemp,
+    float sensorMinTemp,
+    float sensorMaxTemp,
+    float colorMinTemp,
+    float colorMaxTemp,
     float fps,
     ScalingMode mode,
     TempUnit unit,
@@ -209,6 +242,9 @@ uint32_t getI2CSpeedSetting();
 bool getRgbLedEnabledSetting();
 bool getLiveDenoiseSetting();
 bool getBLEEnabledSetting();
+ThermalRangeMode getThermalRangeModeSetting();
+float getManualMinTempSetting();
+float getManualMaxTempSetting();
 
 void setTempUnitSetting(TempUnit unit);
 void setPaletteSetting(PaletteType pal);
@@ -220,8 +256,16 @@ void setI2CSpeedSetting(uint32_t speedHz);
 void setRgbLedEnabledSetting(bool enabled);
 void setLiveDenoiseSetting(bool enabled);
 void setBLEEnabledSetting(bool enabled);
+void setThermalRangeModeSetting(ThermalRangeMode mode);
+void setManualMinTempSetting(float minC);
+void setManualMaxTempSetting(float maxC);
 
 // Shared Temperature Conversion Helpers
 float convertTemp(float tempC, TempUnit unit);
 const char* getUnitSym(TempUnit unit);
+void computeEffectiveThermalRange(float sceneMin, float sceneMax, float& outEffectiveMin, float& outRange);
 const char* getUnitFullName(TempUnit unit);
+void formatTempStr(char* buf, size_t bufSize, float tempC, TempUnit unit, int decimals = 1, bool includeUnit = true);
+const char* getScalingModeShortName(ScalingMode mode);
+const char* getScalingModeLongName(ScalingMode mode);
+const char* getPaletteName(PaletteType pal);

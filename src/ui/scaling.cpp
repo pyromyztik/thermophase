@@ -89,7 +89,6 @@ static void scalingBtnEventCb(lv_event_t* e) {
         if (idx < 5) {
             ScalingMode chosen = (ScalingMode)idx;
             setScalingModeSetting(chosen);
-            updateScalingMode(chosen);
             updateScalingValues();
             updateSettingsValues();
 
@@ -124,8 +123,8 @@ static void scalingBtnEventCb(lv_event_t* e) {
                 lv_anim_start(&a_val);
             }
         } else {
-            // Back to Settings screen (focused on item 4 "Upscaling")
-            uiNavToSettings(4);
+            // Back to Settings screen (focused on item "Upscaling")
+            uiNavToSettings(SETTING_UPSCALING);
         }
     }
 }

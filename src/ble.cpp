@@ -28,12 +28,29 @@ static volatile bool deviceConnected = false;
 static bool bleEnabled = true;
 static bool bleInitialized = false;
 static char connectedClientInfo[32] = "";
+#include <esp_heap_caps.h>
+
 static volatile bool bleStreamingActive = false;
 static volatile bool s_pptTransferActive = false;
 static volatile bool s_pptTransferPending = false;
+static volatile bool s_snapshotTransferActive = false;
+static volatile bool s_snapshotTransferPending = false;
 static volatile uint16_t currentPeerMTU = 23;
 
 static void runPPTSpectralTransfer();
+static void runSnapshotTransfer();
+
+// Asynchronous Snapshot Picture Transfer Buffer
+struct BLESnapshotTransfer {
+    int16_t temperatures[768];
+    float minTemp;
+    float maxTemp;
+    float centerTemp;
+    uint32_t timestamp;
+    uint32_t crc32;
+};
+static BLESnapshotTransfer s_snapshotData;
+static char* s_snapshotDataLine = nullptr;
 
 // Ring buffer for incoming RX bytes
 static constexpr size_t RX_BUFFER_SIZE = 256;
@@ -46,6 +63,7 @@ struct BLEFrameSnapshot {
     float temperatures[768];
     float minTemp;
     float maxTemp;
+    uint8_t rangeMode;
     uint32_t frameIdx;
 };
 
@@ -332,7 +350,7 @@ void bleWrite(const uint8_t* data, size_t len) {
                 break;
             }
 
-            if (pHm10Characteristic && !s_pptTransferActive) {
+            if (pHm10Characteristic && !s_pptTransferActive && !s_snapshotTransferActive) {
                 pHm10Characteristic->setValue(const_cast<uint8_t*>(data + offset), toSend);
                 pHm10Characteristic->notify();
             }
@@ -387,6 +405,10 @@ bool isBLETransferringPPT() {
     return s_pptTransferActive || s_pptTransferPending;
 }
 
+bool isBLETransferringSnapshot() {
+    return s_snapshotTransferActive || s_snapshotTransferPending;
+}
+
 void outPrintf(const char* fmt, ...) {
     char buf[256];
     va_list args;
@@ -396,8 +418,8 @@ void outPrintf(const char* fmt, ...) {
 
     if (len > 0) {
         Serial.print(buf);
-        // Suppress periodic background telemetry over BLE while PPT Spectral transmission is active
-        if (isBLEConnected() && !isBLETransferringPPT()) {
+        // Suppress periodic background telemetry over BLE while PPT or Snapshot transmission is active
+        if (isBLEConnected() && !isBLETransferringPPT() && !isBLETransferringSnapshot()) {
             bleWrite(reinterpret_cast<const uint8_t*>(buf), static_cast<size_t>(len));
         }
     }
@@ -406,7 +428,7 @@ void outPrintf(const char* fmt, ...) {
 void outPrint(const char* str) {
     if (!str) return;
     Serial.print(str);
-    if (isBLEConnected() && !isBLETransferringPPT()) {
+    if (isBLEConnected() && !isBLETransferringPPT() && !isBLETransferringSnapshot()) {
         blePrint(str);
     }
 }
@@ -415,7 +437,7 @@ void outPrintln(const char* str) {
     if (str && strlen(str) > 0) {
         outPrint(str);
     }
-    if (!isBLETransferringPPT()) {
+    if (!isBLETransferringPPT() && !isBLETransferringSnapshot()) {
         outPrint("\r\n");
     } else {
         Serial.print("\r\n");
@@ -429,8 +451,8 @@ bool isBLEStreaming() {
 void setBLEStreaming(bool enable) {
     if (bleStreamingActive == enable) return;
     if (enable) {
-        Serial.println("\n[STREAM] >>> THERMAL_STREAM_START: 32x24 int16, sync=0x5AA55AA6, bytes=1540 <<<");
-        blePrintf("[STREAM] START: 32x24 int16, sync=0x5AA55AA6\r\n");
+        Serial.println("\n[STREAM] >>> THERMAL_STREAM_START: 32x24 int16 + range, sync=0x5AA55AA7, bytes=1546 <<<");
+        blePrintf("[STREAM] START: 32x24 int16, sync=0x5AA55AA7\r\n");
         bleStreamingActive = true;
 
         // Request fast connection interval (15ms - 30ms) now that GATT discovery and MTU are established
@@ -464,7 +486,13 @@ static void bleStreamTask(void* pvParameters) {
             runPPTSpectralTransfer();
         }
 
-        if (s_pptTransferActive || !bleStreamingActive || !deviceConnected || !pTxCharacteristic) {
+        // 2. Service pending Snapshot Picture wireless transfer if requested
+        if (s_snapshotTransferPending) {
+            s_snapshotTransferPending = false;
+            runSnapshotTransfer();
+        }
+
+        if (s_pptTransferActive || s_snapshotTransferActive || !bleStreamingActive || !deviceConnected || !pTxCharacteristic) {
             continue;
         }
 
@@ -483,9 +511,10 @@ static void bleStreamTask(void* pvParameters) {
         }
 
         // 1. Output serial indicator for the receiver (suggests receiver render sent data)
-        Serial.printf("[FRAME:%lu] 32x24 min=%.2f max=%.2f (RENDER)\n",
+        Serial.printf("[FRAME:%lu] 32x24 min=%.2f max=%.2f mode=%s (RENDER)\n",
                       (unsigned long)s_bleWorkerSnapshot.frameIdx,
-                      s_bleWorkerSnapshot.minTemp, s_bleWorkerSnapshot.maxTemp);
+                      s_bleWorkerSnapshot.minTemp, s_bleWorkerSnapshot.maxTemp,
+                      s_bleWorkerSnapshot.rangeMode ? "MANUAL" : "AUTO");
 
         // 2. Query true connection MTU (negotiated with peer)
         uint16_t peerMtu = (currentPeerMTU > 23) ? currentPeerMTU : 23;
@@ -501,14 +530,30 @@ static void bleStreamTask(void* pvParameters) {
         if (chunkSize > 512) chunkSize = 512;
         if (chunkSize < 20) chunkSize = 20;
 
-        // 3. Assemble 1540-byte packet: MAGIC_HEADER (0x5AA55AA6) + 768 int16 values (centi-degrees C)
-        // 1540 bytes vs 3076 bytes cuts radio airtime by 50% and requires only 3-4 chunks at MTU 517!
+        // 3. Assemble 1546-byte packet:
+        // MAGIC_HEADER (0x5AA55AA7) + rangeMode (1B) + reserved (1B) + minTemp (2B int16 cdeg) + maxTemp (2B int16 cdeg) + 768 int16 values (centi-degrees C)
         s_blePacketBuffer[0] = 0x5A;
         s_blePacketBuffer[1] = 0xA5;
         s_blePacketBuffer[2] = 0x5A;
-        s_blePacketBuffer[3] = 0xA6;
+        s_blePacketBuffer[3] = 0xA7;
 
-        int16_t* pInt16 = reinterpret_cast<int16_t*>(s_blePacketBuffer + 4);
+        s_blePacketBuffer[4] = s_bleWorkerSnapshot.rangeMode;
+        s_blePacketBuffer[5] = 0x00; // Reserved
+
+        int32_t minCdeg = (int32_t)std::round(s_bleWorkerSnapshot.minTemp * 100.0f);
+        if (minCdeg < -32768) minCdeg = -32768;
+        if (minCdeg > 32767) minCdeg = 32767;
+        int16_t minVal = (int16_t)minCdeg;
+
+        int32_t maxCdeg = (int32_t)std::round(s_bleWorkerSnapshot.maxTemp * 100.0f);
+        if (maxCdeg < -32768) maxCdeg = -32768;
+        if (maxCdeg > 32767) maxCdeg = 32767;
+        int16_t maxVal = (int16_t)maxCdeg;
+
+        memcpy(s_blePacketBuffer + 6, &minVal, sizeof(int16_t));
+        memcpy(s_blePacketBuffer + 8, &maxVal, sizeof(int16_t));
+
+        int16_t* pInt16 = reinterpret_cast<int16_t*>(s_blePacketBuffer + 10);
         for (size_t i = 0; i < 768; ++i) {
             float val = s_bleWorkerSnapshot.temperatures[i];
             if (!std::isfinite(val)) val = 25.0f;
@@ -517,7 +562,7 @@ static void bleStreamTask(void* pvParameters) {
             if (cdeg > 32767) cdeg = 32767;
             pInt16[i] = (int16_t)cdeg;
         }
-        size_t totalBytes = 4 + 768 * sizeof(int16_t); // 1540 bytes
+        size_t totalBytes = 10 + 768 * sizeof(int16_t); // 1546 bytes
         size_t offset = 0;
 
         // Stream notifications directly to the subscribed NUS TX characteristic
@@ -548,7 +593,7 @@ static void bleStreamTask(void* pvParameters) {
 }
 
 // Instantaneous non-blocking snapshot: takes < 1 microsecond, never stalls sensor task
-void streamThermalFrameBLE(const float* temps, size_t count, float minTemp, float maxTemp, uint32_t frameIdx) {
+void streamThermalFrameBLE(const float* temps, size_t count, float minTemp, float maxTemp, uint8_t rangeMode, uint32_t frameIdx) {
     if (!bleStreamingActive || !deviceConnected || !temps || count == 0) return;
 
     if (s_bleFrameMutex && xSemaphoreTake(s_bleFrameMutex, 0) == pdTRUE) {
@@ -556,6 +601,7 @@ void streamThermalFrameBLE(const float* temps, size_t count, float minTemp, floa
         memcpy(s_bleFrameBuffer.temperatures, temps, n * sizeof(float));
         s_bleFrameBuffer.minTemp = minTemp;
         s_bleFrameBuffer.maxTemp = maxTemp;
+        s_bleFrameBuffer.rangeMode = rangeMode;
         s_bleFrameBuffer.frameIdx = frameIdx;
         s_bleNewFrameAvailable = true;
         xSemaphoreGive(s_bleFrameMutex);
@@ -678,6 +724,108 @@ void triggerPPTBLETransfer() {
     }
 
     s_pptTransferPending = true;
+    if (s_bleStreamTaskHandle != NULL) {
+        xTaskNotifyGive(s_bleStreamTaskHandle);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Snapshot Picture Asynchronous BLE Transmission (triggered on freeze)
+// -----------------------------------------------------------------------------
+
+static void runSnapshotTransfer() {
+    s_snapshotTransferActive = true;
+    if (!deviceConnected) {
+        s_snapshotTransferActive = false;
+        return;
+    }
+
+    Serial.printf("\n[BLE] >>> STARTING THERMAL SNAPSHOT WIRELESS TRANSFER <<<\n");
+
+    if (s_snapshotDataLine == nullptr) {
+        s_snapshotDataLine = (char*)heap_caps_malloc(2304, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_snapshotDataLine) {
+            s_snapshotDataLine = (char*)malloc(2304);
+        }
+    }
+
+    if (!s_snapshotDataLine) {
+        Serial.println("[BLE] Failed to allocate snapshot line buffer!");
+        s_snapshotTransferActive = false;
+        return;
+    }
+
+    char headerBuf[256];
+    snprintf(headerBuf, sizeof(headerBuf),
+             "[SNAPSHOT_START] TIMESTAMP=%lu WIDTH=32 HEIGHT=24 MIN=%.2f MAX=%.2f CTR=%.2f\r\n",
+             (unsigned long)s_snapshotData.timestamp,
+             s_snapshotData.minTemp, s_snapshotData.maxTemp, s_snapshotData.centerTemp);
+    blePrint(headerBuf);
+    vTaskDelay(pdMS_TO_TICKS(30));
+
+    // Base64 encode the 1536 raw binary bytes (768 * int16 centi-degrees) -> 2048 chars
+    const char prefix[] = "[SNAPSHOT_DATA] ";
+    const size_t prefixLen = sizeof(prefix) - 1; // 16
+    memcpy(s_snapshotDataLine, prefix, prefixLen);
+
+    base64Encode(reinterpret_cast<const uint8_t*>(s_snapshotData.temperatures),
+                 768 * sizeof(int16_t),
+                 s_snapshotDataLine + prefixLen,
+                 2304 - prefixLen - 4);
+
+    size_t b64Len = strlen(s_snapshotDataLine);
+    s_snapshotDataLine[b64Len] = '\r';
+    s_snapshotDataLine[b64Len + 1] = '\n';
+    s_snapshotDataLine[b64Len + 2] = '\0';
+
+    blePrint(s_snapshotDataLine);
+    vTaskDelay(pdMS_TO_TICKS(30));
+
+    // Snapshot completion & IEEE 802.3 CRC32 verification footer
+    snprintf(headerBuf, sizeof(headerBuf),
+             "[SNAPSHOT_END] TIMESTAMP=%lu CRC32=0x%08lX\r\n",
+             (unsigned long)s_snapshotData.timestamp,
+             (unsigned long)s_snapshotData.crc32);
+    blePrint(headerBuf);
+    vTaskDelay(pdMS_TO_TICKS(30));
+
+    Serial.printf("[BLE] Thermal Snapshot transferred (CRC32: 0x%08lX)\n",
+                  (unsigned long)s_snapshotData.crc32);
+
+    s_snapshotTransferActive = false;
+}
+
+void triggerSnapshotBLETransfer(const float* temps, size_t count, float minTemp, float maxTemp, float centerTemp) {
+    if (!deviceConnected || !temps || count == 0) return;
+    if (s_snapshotTransferActive || s_snapshotTransferPending || s_pptTransferActive) return;
+
+    size_t n = (count > 768) ? 768 : count;
+    for (size_t i = 0; i < n; ++i) {
+        float val = temps[i];
+        if (!std::isfinite(val)) val = 25.0f;
+        int32_t cdeg = (int32_t)std::round(val * 100.0f);
+        if (cdeg < -32768) cdeg = -32768;
+        if (cdeg > 32767) cdeg = 32767;
+        s_snapshotData.temperatures[i] = (int16_t)cdeg;
+    }
+    s_snapshotData.minTemp = minTemp;
+    s_snapshotData.maxTemp = maxTemp;
+    s_snapshotData.centerTemp = centerTemp;
+    s_snapshotData.timestamp = millis();
+
+    // IEEE 802.3 CRC32 checksum over the 1536 raw binary bytes (768 * int16_t)
+    uint32_t crc = 0xFFFFFFFF;
+    const uint8_t* pRawBytes = reinterpret_cast<const uint8_t*>(s_snapshotData.temperatures);
+    size_t rawLen = n * sizeof(int16_t);
+    for (size_t i = 0; i < rawLen; ++i) {
+        crc ^= pRawBytes[i];
+        for (int j = 0; j < 8; ++j) {
+            crc = (crc >> 1) ^ (0xEDB88320 & (-(int32_t)(crc & 1)));
+        }
+    }
+    s_snapshotData.crc32 = ~crc;
+
+    s_snapshotTransferPending = true;
     if (s_bleStreamTaskHandle != NULL) {
         xTaskNotifyGive(s_bleStreamTaskHandle);
     }
