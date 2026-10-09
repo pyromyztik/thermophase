@@ -1,6 +1,7 @@
 #include "ui.hpp"
 #include "power.hpp"
 #include "ble.hpp"
+#include "wifi.hpp"
 
 // Main Menu Shared Variables
 lv_obj_t* main_menu_list = nullptr;
@@ -13,6 +14,7 @@ static const char* mainMenuLabels[MAIN_MENU_COUNT] = {
     "Live Thermal View",
     "Pulsed Phase (PPT)",
     "Stream over BLE",
+    "Stream over Wi-Fi",
     "Settings",
     "Power Off"
 };
@@ -21,6 +23,7 @@ static const char* mainMenuGlyphs[MAIN_MENU_COUNT] = {
     LV_SYMBOL_PLAY,
     LV_SYMBOL_STOP,
     UI_SYMBOL_CIRCLE,
+    LV_SYMBOL_WIFI,
     LV_SYMBOL_SETTINGS,
     LV_SYMBOL_POWER
 };
@@ -37,29 +40,30 @@ static void mainMenuBtnEventCb(lv_event_t* e) {
                 lv_obj_add_flag(mainMenuArrows[i], LV_OBJ_FLAG_HIDDEN);
             }
         }
-        // Power Off item (index 4) is styled like a back/exit button:
+        // Power Off item (index 5) is styled like a back/exit button:
         // fills with red, text and icons switch to black
-        if (idx == 4) {
-            if (mainMenuLabels_objs[4]) lv_obj_set_style_text_color(mainMenuLabels_objs[4], lv_color_black(), 0);
-            if (mainMenuArrows[4]) lv_obj_set_style_text_color(mainMenuArrows[4], lv_color_black(), 0);
-            if (mainMenuIcons[4]) lv_obj_set_style_text_color(mainMenuIcons[4], lv_color_black(), 0);
+        if (idx == 5) {
+            if (mainMenuLabels_objs[5]) lv_obj_set_style_text_color(mainMenuLabels_objs[5], lv_color_black(), 0);
+            if (mainMenuArrows[5]) lv_obj_set_style_text_color(mainMenuArrows[5], lv_color_black(), 0);
+            if (mainMenuIcons[5]) lv_obj_set_style_text_color(mainMenuIcons[5], lv_color_black(), 0);
         } else {
-            if (mainMenuLabels_objs[4]) lv_obj_set_style_text_color(mainMenuLabels_objs[4], UI_COLOR_TEXT_DIM, 0);
-            if (mainMenuIcons[4]) lv_obj_set_style_text_color(mainMenuIcons[4], UI_COLOR_TEXT_DIM, 0);
+            if (mainMenuLabels_objs[5]) lv_obj_set_style_text_color(mainMenuLabels_objs[5], UI_COLOR_TEXT_DIM, 0);
+            if (mainMenuIcons[5]) lv_obj_set_style_text_color(mainMenuIcons[5], UI_COLOR_TEXT_DIM, 0);
         }
 
         // Ensure focused item is smoothly brought into view in scrollable container
         if (main_menu_list != nullptr) {
+            lv_anim_enable_t animMode = (lv_scr_act() == screen_main_menu) ? LV_ANIM_ON : LV_ANIM_OFF;
             if (idx == 0) {
-                lv_obj_scroll_to_y(main_menu_list, 0, LV_ANIM_ON);
+                lv_obj_scroll_to_y(main_menu_list, 0, animMode);
             } else {
-                lv_obj_scroll_to_view(mainMenuBtns[idx], LV_ANIM_ON);
+                lv_obj_scroll_to_view(mainMenuBtns[idx], animMode);
             }
         }
     } else if (code == LV_EVENT_DEFOCUSED) {
-        if (idx == 4) {
-            if (mainMenuLabels_objs[4]) lv_obj_set_style_text_color(mainMenuLabels_objs[4], UI_COLOR_TEXT_DIM, 0);
-            if (mainMenuIcons[4]) lv_obj_set_style_text_color(mainMenuIcons[4], UI_COLOR_TEXT_DIM, 0);
+        if (idx == 5) {
+            if (mainMenuLabels_objs[5]) lv_obj_set_style_text_color(mainMenuLabels_objs[5], UI_COLOR_TEXT_DIM, 0);
+            if (mainMenuIcons[5]) lv_obj_set_style_text_color(mainMenuIcons[5], UI_COLOR_TEXT_DIM, 0);
         }
     } else if (code == LV_EVENT_CLICKED) {
         if (idx == 0) {
@@ -69,10 +73,13 @@ static void mainMenuBtnEventCb(lv_event_t* e) {
         } else if (idx == 2) {
             bool nextState = !isBLEStreaming();
             setBLEStreaming(nextState);
-            refreshMainMenuBLEState(false);
+            refreshMainMenuWirelessState(false);
         } else if (idx == 3) {
-            uiNavToSettings();
+            // Stream over Wi-Fi clicked: enter dedicated low-memory streaming mode
+            uiNavToWiFiStream();
         } else if (idx == 4) {
+            uiNavToSettings();
+        } else if (idx == 5) {
             // Power off action with smooth fade out
             Serial.println("[UI] Powering Off System...");
             enterDeepSleep();
@@ -81,14 +88,18 @@ static void mainMenuBtnEventCb(lv_event_t* e) {
 }
 
 static int s_currentLayoutCount = -1;
+static bool s_lastBleConnected = false;
+static bool s_lastWifiEnabled = false;
+static bool s_lastWifiConnected = false;
 
-void refreshMainMenuBLEState(bool resetFocus) {
+void refreshMainMenuWirelessState(bool resetFocus) {
     if (!screen_main_menu) return;
 
     bool bleConnected = isBLEEnabled() && isBLEConnected();
-    int neededCount = bleConnected ? 5 : 4;
+    bool wifiEnabled = isWiFiStreamingEnabled();
+    bool wifiConnected = wifiEnabled && isWiFiClientConnected();
 
-    // 1. Update button 2 state labels & glyphs (always safe)
+    // 1. Update BLE button state labels & glyphs
     if (mainMenuLabels_objs[2] && mainMenuIcons[2]) {
         if (isBLEStreaming()) {
             lv_label_set_text(mainMenuLabels_objs[2], "Stop BLE Stream");
@@ -105,30 +116,94 @@ void refreshMainMenuBLEState(bool resetFocus) {
         }
     }
 
-    // 2. Only rebuild the group and reposition widgets if layout structure changed or resetFocus requested
-    if (neededCount == s_currentLayoutCount && !resetFocus) {
+    // 2. Update Wi-Fi button state labels & glyphs
+    if (mainMenuLabels_objs[3] && mainMenuIcons[3]) {
+        lv_label_set_text(mainMenuLabels_objs[3], "Stream over Wi-Fi");
+        lv_obj_set_style_text_color(mainMenuLabels_objs[3], UI_COLOR_TEXT, 0);
+        lv_label_set_text(mainMenuIcons[3], LV_SYMBOL_WIFI);
+        lv_obj_set_style_text_font(mainMenuIcons[3], &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_color(mainMenuIcons[3], wifiConnected ? lv_color_hex(0x2196F3) : UI_COLOR_CYAN, 0);
+    }
+
+    // Determine visible items list
+    int mapIdx[MAIN_MENU_COUNT];
+    int neededCount = 0;
+    mapIdx[neededCount++] = 0; // Live Thermal View
+    mapIdx[neededCount++] = 1; // PPT
+    if (bleConnected) {
+        mapIdx[neededCount++] = 2; // Stream over BLE
+    }
+    if (wifiEnabled) {
+        mapIdx[neededCount++] = 3; // Stream over Wi-Fi
+    }
+    mapIdx[neededCount++] = 4; // Settings
+    mapIdx[neededCount++] = 5; // Power Off
+
+    // 3. Only rebuild layout and wheel group if structure changed or resetFocus requested
+    bool layoutChanged = (neededCount != s_currentLayoutCount) ||
+                         (bleConnected != s_lastBleConnected) ||
+                         (wifiEnabled != s_lastWifiEnabled) ||
+                         (wifiConnected != s_lastWifiConnected);
+
+    if (!layoutChanged && !resetFocus) {
         return;
     }
-    s_currentLayoutCount = neededCount;
 
-    lv_obj_t* prevFocused = ui_wheel_group ? lv_group_get_focused(ui_wheel_group) : nullptr;
-    if (ui_wheel_group) {
+    bool isMainMenuActive = (getAppState() == APP_STATE_MAIN_MENU);
+
+    // If main menu is not the active state, DO NOT touch ui_wheel_group!
+    // Instead mark the layout dirty so when uiNavToMainMenu() runs, it rebuilds completely.
+    if (!isMainMenuActive && getAppState() != APP_STATE_BOOT) {
+        s_currentLayoutCount = -1;
+        s_lastBleConnected = bleConnected;
+        s_lastWifiEnabled = wifiEnabled;
+        s_lastWifiConnected = wifiConnected;
+        return;
+    }
+
+    s_currentLayoutCount = neededCount;
+    s_lastBleConnected = bleConnected;
+    s_lastWifiEnabled = wifiEnabled;
+    s_lastWifiConnected = wifiConnected;
+
+    lv_obj_t* prevFocused = (isMainMenuActive && ui_wheel_group) ? lv_group_get_focused(ui_wheel_group) : nullptr;
+    if (isMainMenuActive && ui_wheel_group) {
         lv_group_remove_all_objs(ui_wheel_group);
     }
 
-    if (bleConnected) {
-        // 5 items layout: height 36 px (fixed size), Y positions {8, 50, 92, 134, 176} inside scrollable container
-        static const int itemY5[5] = {8, 50, 92, 134, 176};
-        for (int i = 0; i < MAIN_MENU_COUNT; ++i) {
-            lv_obj_set_size(mainMenuBtns[i], 260, 36);
-            lv_obj_set_pos(mainMenuBtns[i], 30, itemY5[i]);
-            lv_obj_clear_flag(mainMenuBtns[i], LV_OBJ_FLAG_HIDDEN);
-            if (ui_wheel_group) {
-                lv_group_add_obj(ui_wheel_group, mainMenuBtns[i]);
-            }
-        }
+    // Hide all items first
+    for (int i = 0; i < MAIN_MENU_COUNT; ++i) {
+        lv_obj_add_flag(mainMenuBtns[i], LV_OBJ_FLAG_HIDDEN);
+    }
 
-        if (resetFocus || prevFocused == nullptr) {
+    // Layout visible items
+    bool prevStillVisible = false;
+    for (int slot = 0; slot < neededCount; ++slot) {
+        int i = mapIdx[slot];
+        int itemY = (neededCount == 4) ? (9 + slot * 42) : (8 + slot * 42);
+
+        lv_obj_set_size(mainMenuBtns[i], 260, 36);
+        lv_obj_set_pos(mainMenuBtns[i], 30, itemY);
+        lv_obj_clear_flag(mainMenuBtns[i], LV_OBJ_FLAG_HIDDEN);
+
+        if (isMainMenuActive && ui_wheel_group) {
+            lv_group_add_obj(ui_wheel_group, mainMenuBtns[i]);
+        }
+        if (prevFocused == mainMenuBtns[i]) {
+            prevStillVisible = true;
+        }
+    }
+
+    if (main_menu_list) {
+        if (neededCount == 4) {
+            lv_obj_set_scrollbar_mode(main_menu_list, LV_SCROLLBAR_MODE_OFF);
+        } else {
+            lv_obj_set_scrollbar_mode(main_menu_list, LV_SCROLLBAR_MODE_AUTO);
+        }
+    }
+
+    if (isMainMenuActive) {
+        if (resetFocus || prevFocused == nullptr || !prevStillVisible) {
             if (main_menu_list) lv_obj_scroll_to_y(main_menu_list, 0, LV_ANIM_OFF);
             if (ui_wheel_group) lv_group_focus_obj(mainMenuBtns[0]);
             for (int i = 0; i < MAIN_MENU_COUNT; ++i) {
@@ -138,36 +213,10 @@ void refreshMainMenuBLEState(bool resetFocus) {
         } else {
             if (ui_wheel_group) lv_group_focus_obj(prevFocused);
         }
-    } else {
-        // 4 items layout: height 36 px (fixed size), Y positions {9, 51, 93, 135} (fits without scrolling)
-        static const int itemY4[4] = {9, 51, 93, 135};
-        int mapIdx[4] = {0, 1, 3, 4};
-
-        // Hide stream button
-        lv_obj_add_flag(mainMenuBtns[2], LV_OBJ_FLAG_HIDDEN);
-
-        for (int slot = 0; slot < 4; ++slot) {
-            int i = mapIdx[slot];
-            lv_obj_set_size(mainMenuBtns[i], 260, 36);
-            lv_obj_set_pos(mainMenuBtns[i], 30, itemY4[slot]);
-            lv_obj_clear_flag(mainMenuBtns[i], LV_OBJ_FLAG_HIDDEN);
-            if (ui_wheel_group) {
-                lv_group_add_obj(ui_wheel_group, mainMenuBtns[i]);
-            }
-        }
-
-        if (main_menu_list) lv_obj_scroll_to_y(main_menu_list, 0, LV_ANIM_OFF);
-
-        if (resetFocus || prevFocused == nullptr || prevFocused == mainMenuBtns[2]) {
-            if (ui_wheel_group) lv_group_focus_obj(mainMenuBtns[0]);
-            for (int i = 0; i < MAIN_MENU_COUNT; ++i) {
-                if (i == 0) lv_obj_clear_flag(mainMenuArrows[i], LV_OBJ_FLAG_HIDDEN);
-                else lv_obj_add_flag(mainMenuArrows[i], LV_OBJ_FLAG_HIDDEN);
-            }
-        } else {
-            if (ui_wheel_group) lv_group_focus_obj(prevFocused);
-        }
     }
+
+    Serial.printf("[UI] Main Menu layout refreshed: %d visible items (BLE=%d, WiFi=%d)\n",
+                  neededCount, bleConnected ? 1 : 0, wifiConnected ? 1 : 0);
 }
 
 void buildMainMenuScreen() {
@@ -207,13 +256,13 @@ void buildMainMenuScreen() {
     lv_obj_set_style_radius(main_menu_list, 0, LV_PART_SCROLLBAR);
     lv_obj_set_style_pad_right(main_menu_list, 4, LV_PART_SCROLLBAR);
 
-    // Menu Buttons (All 5 items created as children of main_menu_list; sized & positioned dynamically)
+    // Menu Buttons (All 6 items created as children of main_menu_list; sized & positioned dynamically)
     for (int i = 0; i < MAIN_MENU_COUNT; ++i) {
         mainMenuBtns[i] = lv_btn_create(main_menu_list);
         lv_obj_set_size(mainMenuBtns[i], 260, 36);
         lv_obj_add_style(mainMenuBtns[i], &style_btn_default, 0);
-        if (i == 4) {
-            // Power Off button: styled like back/exit button (filled with red on focus)
+        if (i == 5) {
+            // Power Off button (index 5): styled like back/exit button (filled with red on focus)
             lv_obj_add_style(mainMenuBtns[i], &style_btn_back_focused, LV_STATE_FOCUSED);
             lv_obj_add_style(mainMenuBtns[i], &style_btn_back_focused, LV_STATE_FOCUS_KEY);
         } else {
@@ -224,7 +273,7 @@ void buildMainMenuScreen() {
 
         // Selection Arrow Indicator
         mainMenuArrows[i] = lv_label_create(mainMenuBtns[i]);
-        if (i == 4) {
+        if (i == 5) {
             lv_label_set_text(mainMenuArrows[i], LV_SYMBOL_LEFT);
             lv_obj_set_style_text_color(mainMenuArrows[i], lv_color_black(), 0);
         } else {
@@ -239,7 +288,7 @@ void buildMainMenuScreen() {
         mainMenuLabels_objs[i] = lv_label_create(mainMenuBtns[i]);
         lv_label_set_text(mainMenuLabels_objs[i], mainMenuLabels[i]);
         lv_obj_align(mainMenuLabels_objs[i], LV_ALIGN_LEFT_MID, 24, 0);
-        lv_obj_set_style_text_color(mainMenuLabels_objs[i], (i == 4) ? UI_COLOR_TEXT_DIM : UI_COLOR_TEXT, 0);
+        lv_obj_set_style_text_color(mainMenuLabels_objs[i], (i == 5) ? UI_COLOR_TEXT_DIM : UI_COLOR_TEXT, 0);
 
         // Right-side icon glyph
         mainMenuIcons[i] = lv_label_create(mainMenuBtns[i]);
@@ -247,6 +296,9 @@ void buildMainMenuScreen() {
         if (i == 2) {
             lv_obj_set_style_text_font(mainMenuIcons[i], &ui_font_circle, 0);
             lv_obj_set_style_text_color(mainMenuIcons[i], UI_COLOR_TEXT_DIM, 0);
+        } else if (i == 3) {
+            lv_obj_set_style_text_font(mainMenuIcons[i], &lv_font_montserrat_12, 0);
+            lv_obj_set_style_text_color(mainMenuIcons[i], lv_color_hex(0x2196F3), 0);
         } else {
             lv_obj_set_style_text_font(mainMenuIcons[i], &lv_font_montserrat_14, 0);
             lv_obj_set_style_text_color(mainMenuIcons[i], UI_COLOR_TEXT_DIM, 0);
@@ -256,8 +308,8 @@ void buildMainMenuScreen() {
         lv_obj_add_event_cb(mainMenuBtns[i], mainMenuBtnEventCb, LV_EVENT_ALL, (void*)(intptr_t)i);
     }
 
-    // Apply dynamic initial layout based on BLE connectivity
-    refreshMainMenuBLEState(true);
+    // Apply dynamic initial layout based on BLE and Wi-Fi connectivity
+    refreshMainMenuWirelessState(true);
 
     // Footer Divider Line (0 to 319 fits inside 320-pixel display)
     static lv_point_t f_line_pts[] = {{0, 216}, {DISPLAY_WIDTH - 1, 216}};

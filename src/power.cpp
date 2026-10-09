@@ -51,15 +51,14 @@ float getBatteryInstantVoltage() {
         samples[i] = analogReadMilliVolts(PIN_BATTERY_ADC);
         delayMicroseconds(40);
     }
-
     // Sort to extract the trimmed median range (outlier rejection)
     std::sort(samples, samples + ADC_BURST_SAMPLES);
 
     uint32_t sum = 0;
-    for (int i = ADC_TRIM_EACH_SIDE; i < ADC_BURST_SAMPLES - ADC_TRIM_EACH_SIDE; ++i) {
+    for (int i = ADC_TRIM_EACH_SIDE; 
+        i < ADC_BURST_SAMPLES - ADC_TRIM_EACH_SIDE; ++i) {
         sum += samples[i];
     }
-
     float pinVolts = (static_cast<float>(sum) / ADC_USED_SAMPLES) / 1000.0f;
     return pinVolts * BATTERY_DIVIDER_RATIO;
 }
@@ -75,21 +74,21 @@ void sampleBattery() {
 
     // Re-prime on boot or when power switch reconnects
     if (!bufferPrimed || (currentConfirmedState == BATTERY_DISCONNECTED && rawVolts >= 1.80f)) {
-        for (size_t i = 0; i < BATTERY_WINDOW_SECONDS; ++i) {
+        for (size_t i = 0; i < BATTERY_WINDOW_SECONDS; ++i) 
             voltWindow[i] = rawVolts;
-        }
+
         voltWindowSum = rawVolts * BATTERY_WINDOW_SECONDS;
         voltWindowCount = BATTERY_WINDOW_SECONDS;
         voltWindowHead = 0;
         bufferPrimed = true;
         lastInstantVoltage = rawVolts;
         displayedPctFloat = -1.0f;
-        currentConfirmedState = (rawVolts >= 1.80f) ? BATTERY_DISCHARGING : BATTERY_DISCONNECTED;
+        currentConfirmedState = (rawVolts >= 1.80f) ? 
+            BATTERY_DISCHARGING : BATTERY_DISCONNECTED;
         chargeDebounce = 0;
         dischargeDebounce = 0;
         return;
     }
-
     // O(1) Running window update
     voltWindowSum -= voltWindow[voltWindowHead];
     voltWindow[voltWindowHead] = rawVolts;
@@ -99,7 +98,6 @@ void sampleBattery() {
     if (voltWindowCount < BATTERY_WINDOW_SECONDS) {
         voltWindowCount++;
     }
-
     // Periodically recalculate exact sum when window wraps around to prevent floating-point accumulation drift
     if (voltWindowHead == 0) {
         voltWindowSum = std::accumulate(voltWindow, voltWindow + voltWindowCount, 0.0f);
@@ -118,9 +116,9 @@ BatteryState updateBatteryState() {
     if (!bufferPrimed) {
         sampleBattery();
     }
-
     // Rely on the cached average and the latest slot in the buffer (avoids redundant ADC burst reads)
-    size_t lastIdx = (voltWindowHead == 0) ? (BATTERY_WINDOW_SECONDS - 1) : (voltWindowHead - 1);
+    size_t lastIdx = (voltWindowHead == 0) ? 
+        (BATTERY_WINDOW_SECONDS - 1) : (voltWindowHead - 1);
     float latestV = voltWindow[lastIdx];
 
     // 1. Hardware power-cut check (slide switch disconnected)
@@ -130,18 +128,21 @@ BatteryState updateBatteryState() {
         dischargeDebounce = 0;
         return BATTERY_DISCONNECTED;
     }
-
     float avgV = getBatteryVoltage();
 
     // 2. Compute slope and step edge metrics:
-    size_t oldestIdx = (voltWindowCount < BATTERY_WINDOW_SECONDS) ? 0 : voltWindowHead;
+    size_t oldestIdx = (voltWindowCount < BATTERY_WINDOW_SECONDS) ? 
+        0 : voltWindowHead;
     float oldestV = voltWindow[oldestIdx];
     float windowDrift = latestV - oldestV; // Net voltage drift across the 30s window
     float stepFromAvg = latestV - avgV;    // Jump relative to 30-second rolling average
-    float instantStep = (lastInstantVoltage > 0.0f) ? (latestV - lastInstantVoltage) : 0.0f;
+    float instantStep = (lastInstantVoltage > 0.0f) ? 
+        (latestV - lastInstantVoltage) : 0.0f;
     lastInstantVoltage = latestV;
 
-    // 3. Multi-criteria software charging evaluation:
+    // 3. Multi-criteria software charging evaluation: 
+    //    yeah this stuff isn't amazing at detecting it, but 
+    //    i'm gonna have to live with it...
     bool isChargingCandidate = false;
     bool isDischargingCandidate = false;
     const char* candStr = "NONE";
@@ -171,25 +172,22 @@ BatteryState updateBatteryState() {
             reasonStr = "STEP_JUMP";
         }
     }
-
     lastCandidateStr = candStr;
     lastCandidateReason = reasonStr;
     lastLoggedInstantStep = instantStep;
     lastLoggedWindowDrift = windowDrift;
 
-    // 4. Robust Debouncing:
+    // 4. Debouncing:
     if (isChargingCandidate) {
         dischargeDebounce = 0;
         if (chargeDebounce < 4) chargeDebounce++;
-        if (chargeDebounce >= 4) {
+        if (chargeDebounce >= 4) 
             currentConfirmedState = BATTERY_CHARGING;
-        }
     } else if (isDischargingCandidate) {
         chargeDebounce = 0;
         if (dischargeDebounce < 3) dischargeDebounce++;
-        if (dischargeDebounce >= 3) {
+        if (dischargeDebounce >= 3) 
             currentConfirmedState = BATTERY_DISCHARGING;
-        }
     } else {
         // Neutral / steady condition: gently decay debounce counters
         if (chargeDebounce > 0) chargeDebounce--;

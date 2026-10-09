@@ -34,9 +34,11 @@ void loadSettings() {
     bool rgbEnabled = prefs.getBool("rgb_led", true);
     bool liveDenoise = prefs.getBool("live_denoise", true);
     bool bleEnabled = prefs.getBool("ble_enabled", true);
+    bool wifiStreaming = prefs.getBool("wifi_stream", false);
     uint8_t rangeMode = prefs.getUChar("range_mode", (uint8_t)THERMAL_RANGE_AUTO);
     float manMin = prefs.getFloat("man_min", 20.0f);
     float manMax = prefs.getFloat("man_max", 50.0f);
+    float emi    = prefs.getFloat("emissivity", 0.95f);
     prefs.end();
 
     // Clamp & sanitize values against potential flash corruption
@@ -49,6 +51,12 @@ void loadSettings() {
     if (rangeMode > 1) rangeMode = (uint8_t)THERMAL_RANGE_AUTO;
     if (manMin < -40.0f || manMin > 200.0f) manMin = 20.0f;
     if (manMax < -30.0f || manMax > 300.0f || manMax <= manMin + 1.0f) manMax = manMin + 30.0f;
+    if (emi < 0.05f || emi > 1.00f || !std::isfinite(emi)) emi = 0.95f;
+
+    // Enforce mutual exclusivity between BLE and WiFi
+    if (wifiStreaming && bleEnabled) {
+        bleEnabled = false;
+    }
 
     // Apply to UI and hardware engines atomically
     setDisplayBrightnessSetting(bright);
@@ -61,13 +69,18 @@ void loadSettings() {
     setRgbLedEnabledSetting(rgbEnabled);
     setLiveDenoiseSetting(liveDenoise);
     setBLEEnabledSetting(bleEnabled);
+    setWiFiStreamingSetting(wifiStreaming);
     setThermalRangeModeSetting((ThermalRangeMode)rangeMode);
     setManualMinTempSetting(manMin);
     setManualMaxTempSetting(manMax);
+    setEmissivitySetting(emi);
 
     settingsDirty = false;
-    Serial.printf("[STORAGE] Loaded settings from NVS -> Brightness: %d%%, Rotation: %s, Unit: %d, Palette: %d, Mirror: %d, Scaling: %d, I2C: %lu Hz, RGB: %s, BLE: %s, Range: %s (%.1f-%.1f C)\n",
-                  bright, (dispRot == 1) ? "180" : "Normal", unit, pal, mirror ? 1 : 0, scale, i2cSpd, rgbEnabled ? "ON" : "OFF", bleEnabled ? "ON" : "OFF", (rangeMode == 1) ? "MANUAL" : "AUTO", manMin, manMax);
+    Serial.printf("[STORAGE] Loaded settings from NVS -> Brightness: %d%%, Rotation: %s, Unit: %d, Palette: %d, Mirror: %d, Scaling: %d, I2C: %lu Hz, RGB: %s, BLE: %s, WiFi: %s, Range: %s (%.1f-%.1f C), Emissivity: %.2f\n",
+                  bright, (dispRot == 1) ? "180" : "Normal", unit, pal, mirror ? 1 : 0, scale, i2cSpd, rgbEnabled ? "ON" : "OFF", bleEnabled ? "ON" : "OFF", wifiStreaming ? "ON" : "OFF", (rangeMode == 1) ? "MANUAL" : "AUTO", manMin, manMax, emi);
+
+    // Synchronize UI labels with loaded settings
+    updateSettingsValues();
 }
 
 void saveSettingsIfDirty() {
@@ -91,9 +104,11 @@ void saveSettingsIfDirty() {
     prefs.putBool("rgb_led", getRgbLedEnabledSetting());
     prefs.putBool("live_denoise", getLiveDenoiseSetting());
     prefs.putBool("ble_enabled", getBLEEnabledSetting());
+    prefs.putBool("wifi_stream", getWiFiStreamingSetting());
     prefs.putUChar("range_mode", (uint8_t)getThermalRangeModeSetting());
     prefs.putFloat("man_min", getManualMinTempSetting());
     prefs.putFloat("man_max", getManualMaxTempSetting());
+    prefs.putFloat("emissivity", getEmissivitySetting());
     prefs.end();
 
     settingsDirty = false;
@@ -119,9 +134,11 @@ void resetSettingsToDefaults() {
     setRgbLedEnabledSetting(true);
     setLiveDenoiseSetting(true);
     setBLEEnabledSetting(true);
+    setWiFiStreamingSetting(false);
     setThermalRangeModeSetting(THERMAL_RANGE_AUTO);
     setManualMinTempSetting(20.0f);
     setManualMaxTempSetting(50.0f);
+    setEmissivitySetting(0.95f);
 
     settingsDirty = false;
     Serial.println("[STORAGE] All settings restored to factory defaults.");

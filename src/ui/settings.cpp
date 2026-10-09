@@ -2,6 +2,7 @@
 #include "display.hpp"
 #include "storage.hpp"
 #include "ble.hpp"
+#include "wifi.hpp"
 
 // Settings Shared Variables
 lv_obj_t* settingsBtns[SETTINGS_COUNT];
@@ -17,9 +18,11 @@ const char* settingsDescriptions[SETTINGS_COUNT] = {
     "Open upscaler menu to configure interpolation modes and live filtering",
     "Select temperature unit (" UI_SYMBOL_DEGREE "C, " UI_SYMBOL_DEGREE "F, K)",
     "Configure automatic or manual temperature range limits for false-color mapping",
+    "Adjust surface emissivity and material presets (0.10 - 1.00)",
     "Select Thermal Sensor's I2C clock: 400 kHz (clean & stable - runs at 8fps) or 800 kHz (little more noisy, but runs at 14-15fps)",
     "Enable or disable the on-board WS2812 RGB target / status indicator LED",
     "Enable or disable Bluetooth wireless telemetry & remote command streaming",
+    "Host Wi-Fi AP 'thermophase AP' (192.168.4.1) for web browser live streaming & telemetry",
     "Restore all system settings, display options, and hardware preferences to factory defaults.",
     "Save all settings and return to main menu."
 };
@@ -32,15 +35,47 @@ static const char* settingsLabels[SETTINGS_COUNT] = {
     "Upscaling",
     "Temp Unit",
     "Thermal Range",
+    "Emissivity",
     "I2C Clock",
     "RGB LED",
     "Bluetooth",
+    "WiFi Streaming",
     "Factory Reset",
     "Back to Main Menu"
 };
 
 static lv_obj_t* settingsNameLabels[SETTINGS_COUNT];
 static lv_obj_t* settingsValLabels[SETTINGS_COUNT];
+
+void updateSettingsDescription(int idx) {
+    if (!settings_desc_label || idx < 0 || idx >= SETTINGS_COUNT) return;
+
+    if (idx == SETTING_BLUETOOTH) {
+        char bleDesc[140];
+        if (!getBLEEnabledSetting()) {
+            snprintf(bleDesc, sizeof(bleDesc), "Bluetooth is OFF (saves ~35-45 mA / ~12%% battery). Click to enable wireless telemetry.");
+        } else if (isBLEConnected()) {
+            const char* client = getBLEConnectedClientInfo();
+            snprintf(bleDesc, sizeof(bleDesc), "Connected to: %s. Streaming live battery & thermal telemetry.", (client && client[0]) ? client : "Device");
+        } else {
+            snprintf(bleDesc, sizeof(bleDesc), "Bluetooth ON: Advertising as 'thermophase'. Streams live telemetry to Web Terminal.");
+        }
+        lv_label_set_text(settings_desc_label, bleDesc);
+    } else if (idx == SETTING_WIFI_STREAMING) {
+        char wifiDesc[140];
+        if (!getWiFiStreamingSetting()) {
+            snprintf(wifiDesc, sizeof(wifiDesc), "WiFi Streaming is OFF (saves battery). Click to host 'thermophase AP' (192.168.4.1).");
+        } else if (isWiFiClientConnected()) {
+            uint8_t count = getWiFiConnectedStationCount();
+            snprintf(wifiDesc, sizeof(wifiDesc), "WiFi AP Active! %u device(s) connected. Web portal running at http://192.168.4.1", count);
+        } else {
+            snprintf(wifiDesc, sizeof(wifiDesc), "WiFi AP Active: 'thermophase AP'. Connect your phone or PC and open http://192.168.4.1");
+        }
+        lv_label_set_text(settings_desc_label, wifiDesc);
+    } else {
+        lv_label_set_text(settings_desc_label, settingsDescriptions[idx]);
+    }
+}
 
 static void settingsBtnEventCb(lv_event_t* e) {
     lv_event_code_t code = lv_event_get_code(e);
@@ -65,23 +100,8 @@ static void settingsBtnEventCb(lv_event_t* e) {
             lv_obj_set_style_text_color(settingsNameLabels[SETTING_BACK], UI_COLOR_TEXT_DIM, 0);
         }
 
-        // Update 1-line description (dynamic info for Bluetooth)
-        if (settings_desc_label != nullptr && idx < SETTINGS_COUNT) {
-            if (idx == SETTING_BLUETOOTH) {
-                char bleDesc[140];
-                if (!getBLEEnabledSetting()) {
-                    snprintf(bleDesc, sizeof(bleDesc), "Bluetooth is OFF (saves ~35-45 mA / ~12%% battery). Click to enable wireless telemetry.");
-                } else if (isBLEConnected()) {
-                    const char* client = getBLEConnectedClientInfo();
-                    snprintf(bleDesc, sizeof(bleDesc), "Connected to: %s. Streaming live battery & thermal telemetry.", (client && client[0]) ? client : "Device");
-                } else {
-                    snprintf(bleDesc, sizeof(bleDesc), "Bluetooth ON: Advertising as 'thermophase'. Streams live telemetry to Web Terminal.");
-                }
-                lv_label_set_text(settings_desc_label, bleDesc);
-            } else {
-                lv_label_set_text(settings_desc_label, settingsDescriptions[idx]);
-            }
-        }
+        // Update 1-line description
+        updateSettingsDescription(idx);
 
         // Ensure focused item is smoothly scrolled into view
         if (idx == SETTING_BRIGHTNESS) {
@@ -125,6 +145,9 @@ static void settingsBtnEventCb(lv_event_t* e) {
             case SETTING_THERMAL_RANGE: // Thermal Range: Open dedicated subpage
                 uiNavToThermalRange(APP_STATE_SETTINGS);
                 return;
+            case SETTING_EMISSIVITY: // Emissivity: Open dedicated subpage
+                uiNavToEmissivity();
+                return;
             case SETTING_I2C_CLOCK: { // I2C Clock: 400 kHz <-> 800 kHz
                 uint32_t currentSpeed = getI2CSpeedSetting();
                 uint32_t nextSpeed = (currentSpeed == I2C_SPEED_800K) ? I2C_SPEED_400K : I2C_SPEED_800K;
@@ -139,15 +162,13 @@ static void settingsBtnEventCb(lv_event_t* e) {
             case SETTING_BLUETOOTH: { // Bluetooth: OFF <-> ON
                 bool nextBle = !getBLEEnabledSetting();
                 setBLEEnabledSetting(nextBle);
-                if (settings_desc_label != nullptr) {
-                    char bleDesc[140];
-                    if (!nextBle) {
-                        snprintf(bleDesc, sizeof(bleDesc), "Bluetooth is OFF (saves ~35-45 mA / ~12%% battery). Click to enable wireless telemetry.");
-                    } else {
-                        snprintf(bleDesc, sizeof(bleDesc), "Bluetooth ON: Advertising as 'thermophase'. Streams live telemetry to Web Terminal.");
-                    }
-                    lv_label_set_text(settings_desc_label, bleDesc);
-                }
+                updateSettingsDescription(SETTING_BLUETOOTH);
+                break;
+            }
+            case SETTING_WIFI_STREAMING: { // WiFi Streaming: OFF <-> ON
+                bool nextWiFi = !getWiFiStreamingSetting();
+                setWiFiStreamingSetting(nextWiFi);
+                updateSettingsDescription(SETTING_WIFI_STREAMING);
                 break;
             }
             case SETTING_FACTORY_RESET: // Factory Reset: Open confirmation screen
@@ -200,6 +221,12 @@ void updateSettingsValues() {
         lv_label_set_text(settingsValLabels[SETTING_THERMAL_RANGE], rangeStrs[(int)getThermalRangeModeSetting() % 2]);
     }
 
+    if (settingsValLabels[SETTING_EMISSIVITY]) {
+        char emiBuf[16];
+        snprintf(emiBuf, sizeof(emiBuf), "%.2f", getEmissivitySetting());
+        lv_label_set_text(settingsValLabels[SETTING_EMISSIVITY], emiBuf);
+    }
+
     if (settingsValLabels[SETTING_I2C_CLOCK]) {
         lv_label_set_text(settingsValLabels[SETTING_I2C_CLOCK], (getI2CSpeedSetting() == I2C_SPEED_800K) ? "800 kHz" : "400 kHz");
     }
@@ -218,6 +245,28 @@ void updateSettingsValues() {
             lv_label_set_text(settingsValLabels[SETTING_BLUETOOTH], "ON");
         }
         lv_obj_set_style_text_color(settingsValLabels[SETTING_BLUETOOTH], UI_COLOR_ACCENT, 0);
+    }
+
+    if (settingsValLabels[SETTING_WIFI_STREAMING]) {
+        if (!getWiFiStreamingSetting()) {
+            lv_label_set_text(settingsValLabels[SETTING_WIFI_STREAMING], "OFF");
+        } else if (isWiFiClientConnected()) {
+            lv_label_set_text(settingsValLabels[SETTING_WIFI_STREAMING], "LINKED");
+        } else {
+            lv_label_set_text(settingsValLabels[SETTING_WIFI_STREAMING], "HOST");
+        }
+        lv_obj_set_style_text_color(settingsValLabels[SETTING_WIFI_STREAMING], UI_COLOR_ACCENT, 0);
+    }
+
+    // Refresh dynamic description text if currently focused on a wireless setting
+    if (settings_desc_label != nullptr && lv_obj_is_valid(settings_desc_label) && ui_wheel_group != nullptr) {
+        lv_obj_t* focused = lv_group_get_focused(ui_wheel_group);
+        for (int i = 0; i < SETTINGS_COUNT; ++i) {
+            if (focused == settingsBtns[i]) {
+                updateSettingsDescription(i);
+                break;
+            }
+        }
     }
 }
 
@@ -321,12 +370,12 @@ void buildSettingsScreen() {
         lv_obj_set_style_text_color(settingsNameLabels[i], (i == SETTINGS_COUNT - 1) ? UI_COLOR_TEXT_DIM : UI_COLOR_TEXT, 0);
 
         // Setting Value (Right column)
-        if (i < 10) {
+        if (i != SETTING_FACTORY_RESET && i != SETTING_BACK) {
             settingsValLabels[i] = lv_label_create(settingsBtns[i]);
             lv_obj_align(settingsValLabels[i], LV_ALIGN_RIGHT_MID, -3, 0);
             lv_obj_set_style_text_color(settingsValLabels[i], UI_COLOR_ACCENT, 0);
             lv_obj_set_style_text_font(settingsValLabels[i], &lv_font_montserrat_12, 0);
-        } else if (i == 10) {
+        } else if (i == SETTING_FACTORY_RESET) {
             // Factory Reset action glyph
             settingsValLabels[i] = lv_label_create(settingsBtns[i]);
             lv_obj_align(settingsValLabels[i], LV_ALIGN_RIGHT_MID, -3, 0);
@@ -360,6 +409,7 @@ void buildSettingsScreen() {
     createSettingBtn(SETTING_UPSCALING);
     createSettingBtn(SETTING_TEMP_UNIT);
     createSettingBtn(SETTING_THERMAL_RANGE);
+    createSettingBtn(SETTING_EMISSIVITY);
 
     // Divider 2
     addDivider(sep2_pts);
@@ -369,6 +419,7 @@ void buildSettingsScreen() {
     createSettingBtn(SETTING_I2C_CLOCK);
     createSettingBtn(SETTING_RGB_LED);
     createSettingBtn(SETTING_BLUETOOTH);
+    createSettingBtn(SETTING_WIFI_STREAMING);
 
     // Divider 3
     addDivider(sep3_pts);

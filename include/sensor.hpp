@@ -65,3 +65,6 @@ void filterSnapshotFrame(const float* src, float* dst);
 void filterPeakPreservingMedian(const float* src, float* dst, float peakThreshold = 2.5f);
 void setLiveDenoiseEnabled(bool enabled);
 bool getLiveDenoiseEnabled();
+
+// Radiometric Emissivity Compensation
+void applyEmissivityCompensation(float* temps, size_t count, float emissivity, float reflectedTempC);

@@ -14,10 +14,10 @@ enum EscState {
     ESC_BRACKET
 };
 
-static void handleSerialCommand(const String& cmd) {
-    if (cmd.equalsIgnoreCase("diagnostics")) {
+void handleSerialCommand(const String& cmd) {
+    if (cmd.equalsIgnoreCase("diagnostics") || cmd.equalsIgnoreCase("diag")) {
         if (diagTaskHandle == NULL) {
-            Serial.println("\n[CMD] Spawning System Diagnostics Task...");
+            outPrintln("\n[CMD] Spawning System Diagnostics Task...");
             xTaskCreatePinnedToCore(
                 diagnosticsMessageTask,
                 "Diag_Task",
@@ -28,7 +28,7 @@ static void handleSerialCommand(const String& cmd) {
                 DIAG_TASK_CORE
             );
         } else {
-            Serial.println("\n[WARN] Diagnostics task is already running.");
+            outPrintln("\n[WARN] Diagnostics task is already running.");
         }
     } else if (cmd.equalsIgnoreCase("compute") ||
                cmd.equalsIgnoreCase("perf") ||
@@ -37,16 +37,16 @@ static void handleSerialCommand(const String& cmd) {
         printComputeHeadroomReport();
     } else if (cmd.equalsIgnoreCase("up") || cmd.equalsIgnoreCase("u")) {
         postWheelEvent(WHEEL_EVENT_ROT_CCW);
-        Serial.println("[SERIAL] Wheel Up (CCW)");
+        outPrintln("[SERIAL] Wheel Up (CCW)");
     } else if (cmd.equalsIgnoreCase("down") || cmd.equalsIgnoreCase("d")) {
         postWheelEvent(WHEEL_EVENT_ROT_CW);
-        Serial.println("[SERIAL] Wheel Down (CW)");
+        outPrintln("[SERIAL] Wheel Down (CW)");
     } else if (cmd.equalsIgnoreCase("click") || cmd.equalsIgnoreCase("c")) {
         postWheelEvent(WHEEL_EVENT_CLICK);
-        Serial.println("[SERIAL] Wheel Click");
+        outPrintln("[SERIAL] Wheel Click");
     } else if (cmd.equalsIgnoreCase("hold") || cmd.equalsIgnoreCase("h")) {
         postWheelEvent(WHEEL_EVENT_LONG_PRESS);
-        Serial.println("[SERIAL] Wheel Long Press (Hold)");
+        outPrintln("[SERIAL] Wheel Long Press (Hold)");
     } else if (cmd.startsWith("brightness") || cmd.startsWith("bright")) {
         int spaceIdx = cmd.indexOf(' ');
         if (spaceIdx > 0) {
@@ -56,36 +56,43 @@ static void handleSerialCommand(const String& cmd) {
                 setDisplayBrightnessSetting((uint8_t)val);
                 updateSettingsValues();
                 updateBrightnessValues();
-                Serial.printf("[SERIAL] Display Brightness set to %d%%\n", val);
+                outPrintf("[SERIAL] Display Brightness set to %d%%\n", val);
             } else {
-                Serial.println("[SERIAL] Error: Brightness must be between 10 and 100.");
+                outPrintln("[SERIAL] Error: Brightness must be between 10 and 100.");
             }
         } else {
-            Serial.printf("[SERIAL] Current Display Brightness: %d%%\n", getDisplayBrightness());
+            outPrintf("[SERIAL] Current Display Brightness: %d%%\n", getDisplayBrightness());
         }
+    } else if (cmd.equalsIgnoreCase("status") || cmd.equalsIgnoreCase("stat")) {
+        outPrintf("[STATUS] Spot: %.1f C | Min: %.1f C | Max: %.1f C | Heap: %u KB | Uptime: %lu s\n",
+                  displayCenterTemp, displayMinTemp, displayMaxTemp,
+                  ESP.getFreeHeap() / 1024, (unsigned long)(millis() / 1000));
+    } else if (cmd.equalsIgnoreCase("clear")) {
+        outPrintln("[TERMINAL] Cleared");
     } else if (cmd.equalsIgnoreCase("ppt_send") || cmd.equalsIgnoreCase("ppt_transfer")) {
-        Serial.println("\n[CMD] Manual PPT Spectral Phasegram BLE Transfer Triggered");
+        outPrintln("\n[CMD] Manual PPT Spectral Phasegram BLE Transfer Triggered");
         triggerPPTBLETransfer();
     } else if (cmd.equalsIgnoreCase("help") || cmd.equalsIgnoreCase("?")) {
-        Serial.println("\n================ Serial Controls & Commands ================");
-        Serial.println("  [Keyboard Controls]");
-        Serial.println("    Up / Left Arrow     : Rotate wheel UP / CCW (continuous repeat)");
-        Serial.println("    Down / Right Arrow  : Rotate wheel DOWN / CW (continuous repeat)");
-        Serial.println("    Enter (tap)         : Click encoder wheel");
-        Serial.println("    Enter (hold >=600ms): Hold encoder wheel (opens main menu)");
-        Serial.println("  [Text Fallbacks]");
-        Serial.println("    'u' / 'up'          : Rotate UP");
-        Serial.println("    'd' / 'down'        : Rotate DOWN");
-        Serial.println("    'c' / 'click'       : Click");
-        Serial.println("    'h' / 'hold'        : Long press / hold");
-        Serial.println("  [System Commands]");
-        Serial.println("    'brightness'        : Query current display brightness");
-        Serial.println("    'brightness <10-100>': Set display brightness percentage");
-        Serial.println("    'compute' / 'perf'  : Print real-time CPU compute & headroom audit");
-        Serial.println("    'diagnostics'       : Run complete system & Wi-Fi scan diagnostics");
-        Serial.println("============================================================\n");
+        outPrintln("\n================ Serial Controls & Commands ================");
+        outPrintln("  [Keyboard Controls]");
+        outPrintln("    Up / Left Arrow     : Rotate wheel UP / CCW (continuous repeat)");
+        outPrintln("    Down / Right Arrow  : Rotate wheel DOWN / CW (continuous repeat)");
+        outPrintln("    Enter (tap)         : Click encoder wheel");
+        outPrintln("    Enter (hold >=600ms): Hold encoder wheel (opens main menu)");
+        outPrintln("  [Text Fallbacks]");
+        outPrintln("    'u' / 'up'          : Rotate UP");
+        outPrintln("    'd' / 'down'        : Rotate DOWN");
+        outPrintln("    'c' / 'click'       : Click");
+        outPrintln("    'h' / 'hold'        : Long press / hold");
+        outPrintln("  [System Commands]");
+        outPrintln("    'brightness'        : Query current display brightness");
+        outPrintln("    'brightness <10-100>': Set display brightness percentage");
+        outPrintln("    'compute' / 'perf'  : Print real-time CPU compute & headroom audit");
+        outPrintln("    'diagnostics'       : Run complete system & Wi-Fi scan diagnostics");
+        outPrintln("    'status'            : Query real-time thermal and system status");
+        outPrintln("============================================================\n");
     } else {
-        Serial.printf("[CMD] Unknown command '%s'. Type 'help' for available commands.\n", cmd.c_str());
+        outPrintf("[CMD] Unknown command '%s'. Type 'help' for available commands.\n", cmd.c_str());
     }
 }
 

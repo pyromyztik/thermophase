@@ -36,14 +36,15 @@
 #define LV_MEM_CUSTOM 0
 #if LV_MEM_CUSTOM == 0
     /* Size of the memory available for `lv_mem_alloc()` in bytes (>= 2kB) */
-    #define LV_MEM_SIZE (64U * 1024U)          /*[bytes]*/
+    /* 256 KB allocated in external PSRAM (where 7+ MB is free) */
+    #define LV_MEM_SIZE (256U * 1024U)          /*[bytes]*/
 
     /* Set an address for the memory pool instead of allocating it as a normal array. Can be in external SRAM too. */
     #define LV_MEM_ADR 0     /*0: unused*/
-    /* Instead of creating a static array, allocate the memory with `malloc` or external RAM */
-    #define LV_MEM_POOL_INCLUDE <stdlib.h>
-    #define LV_MEM_POOL_ALLOC   malloc
-    #define LV_MEM_POOL_FREE    free
+    /* Instead of creating a static array, allocate the memory in external PSRAM to save internal DRAM */
+    #define LV_MEM_POOL_INCLUDE "esp_heap_caps.h"
+    #define LV_MEM_POOL_ALLOC(size)   heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+    #define LV_MEM_POOL_FREE(ptr)    free(ptr)
 #endif /*LV_MEM_CUSTOM*/
 
 /* Number of the intermediate memory buffer used during rendering and other internal processing mechanisms.
@@ -116,7 +117,11 @@
  *-----------*/
 
 /* Enable the log module */
-#define LV_USE_LOG 0
+#define LV_USE_LOG 1
+#if LV_USE_LOG
+    #define LV_LOG_LEVEL LV_LOG_LEVEL_WARN
+    #define LV_LOG_PRINTF 1
+#endif
 
 /*-------------
  * Asserts
@@ -129,6 +134,14 @@
 #define LV_USE_ASSERT_STYLE         0   /*Check if the styles are properly initialized. (Very fast, recommended)*/
 #define LV_USE_ASSERT_MEM_INTEGRITY 0   /*Check the integrity of `lv_mem` after critical operations. (Slow)*/
 #define LV_USE_ASSERT_OBJ           0   /*Check the object's type and existence (e.g. not deleted). (Slow)*/
+
+/* Custom assert handler: print loud failure to stdout/serial and halt safely */
+#include <stdio.h>
+#define LV_ASSERT_HANDLER do { \
+    printf("\n[LVGL CRITICAL ASSERT] Halted at %s:%d\n", __FILE__, __LINE__); \
+    fflush(stdout); \
+    while(1); \
+} while(0);
 
 /*-------------
  * Others

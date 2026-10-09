@@ -1,5 +1,6 @@
 #include "ble.hpp"
 #include "ppt.hpp"
+#include "wifi.hpp"
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
@@ -250,7 +251,7 @@ bool initBLE(const char* deviceName) {
         xTaskCreatePinnedToCore(
             bleStreamTask,
             "BLE_Stream_Task",
-            8192,
+            4096,
             NULL,
             1, // Low priority: never starves sensor read or display rendering
             &s_bleStreamTaskHandle,
@@ -293,11 +294,20 @@ void setBLEEnabled(bool enable) {
             connectedClientInfo[0] = '\0';
         }
         if (bleInitialized) {
-            BLEDevice::getAdvertising()->stop();
+            BLEAdvertising* adv = BLEDevice::getAdvertising();
+            if (adv) {
+                adv->stop();
+            }
+            if (s_hasActiveConn) {
+                esp_ble_gap_disconnect(s_peerBda);
+                s_hasActiveConn = false;
+            }
         }
-        Serial.println("[BLE] Radio advertising disabled (power saving active).");
+        Serial.println("[BLE] Subsystem stopped & radio sleeping (power saving active).");
     } else {
-        if (bleInitialized) {
+        if (!bleInitialized) {
+            initBLE("thermophase");
+        } else {
             BLEDevice::startAdvertising();
             Serial.println("[BLE] Radio advertising enabled as 'thermophase'.");
         }
@@ -422,6 +432,7 @@ void outPrintf(const char* fmt, ...) {
         if (isBLEConnected() && !isBLETransferringPPT() && !isBLETransferringSnapshot()) {
             bleWrite(reinterpret_cast<const uint8_t*>(buf), static_cast<size_t>(len));
         }
+        wifiTerminalLog(buf);
     }
 }
 
@@ -431,6 +442,7 @@ void outPrint(const char* str) {
     if (isBLEConnected() && !isBLETransferringPPT() && !isBLETransferringSnapshot()) {
         blePrint(str);
     }
+    wifiTerminalLog(str);
 }
 
 void outPrintln(const char* str) {
@@ -441,6 +453,7 @@ void outPrintln(const char* str) {
         outPrint("\r\n");
     } else {
         Serial.print("\r\n");
+        wifiTerminalLog("\r\n");
     }
 }
 

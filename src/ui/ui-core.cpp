@@ -6,6 +6,7 @@
 #include "storage.hpp"
 #include "rgb-led.hpp"
 #include "ble.hpp"
+#include "wifi.hpp"
 
 // Active application state
 static AppState currentAppState = APP_STATE_BOOT;
@@ -21,9 +22,11 @@ static uint32_t currentI2CSpeedSetting = I2C_FREQ_RUN;
 static bool currentRgbLedSetting = true;
 static bool currentLiveDenoiseSetting = true;
 static bool currentBLESetting = true;
+static bool currentWiFiSetting = false;
 static ThermalRangeMode currentThermalRangeMode = THERMAL_RANGE_AUTO;
 static float manualMinTemp = 20.0f;
 static float manualMaxTemp = 50.0f;
+static float currentEmissivitySetting = 0.95f;
 
 // Screen pointers
 lv_obj_t* screen_boot = nullptr;
@@ -31,6 +34,7 @@ lv_obj_t* screen_thermal = nullptr;
 lv_obj_t* screen_main_menu = nullptr;
 lv_obj_t* screen_settings = nullptr;
 lv_obj_t* screen_brightness = nullptr;
+lv_obj_t* screen_emissivity = nullptr;
 lv_obj_t* screen_scaling = nullptr;
 lv_obj_t* screen_error = nullptr;
 
@@ -127,10 +131,10 @@ static void buildStyles() {
 struct BatteryIndicatorEntry {
     lv_obj_t* icon;
     lv_obj_t* pct;
-    lv_obj_t* ble;
+    lv_obj_t* wireless;
     bool bleRight;
 };
-static constexpr size_t MAX_BATTERY_INDICATORS = 8;
+static constexpr size_t MAX_BATTERY_INDICATORS = 12;
 static BatteryIndicatorEntry batteryIndicators[MAX_BATTERY_INDICATORS];
 static size_t numBatteryIndicators = 0;
 
@@ -290,34 +294,47 @@ void createBatteryIndicator(lv_obj_t* parent, bool showPercentage, lv_align_t al
         }
     }
 
-    // Bluetooth Icon Label (when bleRight is true: to the right of battery indicator; else to the left)
-    lv_obj_t* ble = lv_label_create(parent);
-    lv_label_set_text(ble, UI_SYMBOL_BLUETOOTH);
-    lv_obj_set_style_text_font(ble, &ui_font_bluetooth, 0);
-    lv_obj_set_style_text_color(ble, UI_COLOR_TEXT_DIM, 0);
+    // Wireless (Bluetooth / Wi-Fi) Icon Label
+    lv_obj_t* wireless = lv_label_create(parent);
+    bool wifiOn = currentWiFiSetting && isWiFiStreamingEnabled();
+    bool bleOn = currentBLESetting && isBLEEnabled();
+
+    if (wifiOn) {
+        lv_label_set_text(wireless, LV_SYMBOL_WIFI);
+        lv_obj_set_style_text_font(wireless, &lv_font_montserrat_10, 0);
+        lv_obj_set_style_text_color(wireless, isWiFiClientConnected() ? lv_color_hex(0x2196F3) : UI_COLOR_TEXT_DIM, 0);
+    } else {
+        lv_label_set_text(wireless, UI_SYMBOL_BLUETOOTH);
+        lv_obj_set_style_text_font(wireless, &ui_font_bluetooth, 0);
+        lv_obj_set_style_text_color(wireless, isBLEConnected() ? lv_color_hex(0x2196F3) : UI_COLOR_TEXT_DIM, 0);
+    }
+
     if (bleRight) {
         if (pct != nullptr) {
-            lv_obj_align_to(ble, pct, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
+            lv_obj_align_to(wireless, pct, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
         } else {
-            lv_obj_align_to(ble, icon, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
+            lv_obj_align_to(wireless, icon, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
         }
     } else {
         if (pct != nullptr) {
-            lv_obj_align_to(ble, pct, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
+            lv_obj_align_to(wireless, pct, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
         } else {
-            lv_obj_align_to(ble, icon, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
+            lv_obj_align_to(wireless, icon, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
         }
     }
-    if (!currentBLESetting) {
-        lv_obj_add_flag(ble, LV_OBJ_FLAG_HIDDEN);
+
+    if (!wifiOn && !bleOn) {
+        lv_obj_add_flag(wireless, LV_OBJ_FLAG_HIDDEN);
     }
-    batteryIndicators[numBatteryIndicators++] = {icon, pct, ble, bleRight};
+    batteryIndicators[numBatteryIndicators++] = {icon, pct, wireless, bleRight};
 }
 
 static uint32_t lastBatteryUIUpdateTime = 0;
 static BatteryState lastBatteryUIState = (BatteryState)255;
 static bool lastBLEUIOn = false;
 static bool lastBLEUIConn = false;
+static bool lastWiFiUIOn = false;
+static bool lastWiFiUIConn = false;
 
 void updateBatteryUI(bool force) {
     // 1. Take a sample every 1000ms to maintain the rolling 30-second average window
@@ -328,13 +345,17 @@ void updateBatteryUI(bool force) {
 
     bool bleOn = currentBLESetting && isBLEEnabled();
     bool bleConn = isBLEConnected();
-    bool bleChanged = (bleOn != lastBLEUIOn) || (bleConn != lastBLEUIConn);
+    bool wifiOn = currentWiFiSetting && isWiFiStreamingEnabled();
+    bool wifiConn = isWiFiClientConnected();
+
+    bool wirelessChanged = (bleOn != lastBLEUIOn) || (bleConn != lastBLEUIConn) ||
+                           (wifiOn != lastWiFiUIOn) || (wifiConn != lastWiFiUIConn);
 
     // 2. Only update UI widgets every 30 seconds (30000ms), UNLESS:
     //    - force is true (e.g. cold boot)
     //    - operational state changed (e.g. charger plugged in / switch flipped)
-    //    - BLE status changed (connected/disconnected/toggled)
-    if (!force && !bleChanged && (state == lastBatteryUIState) && (now - lastBatteryUIUpdateTime < 30000)) {
+    //    - Wireless status changed (connected/disconnected/toggled)
+    if (!force && !wirelessChanged && (state == lastBatteryUIState) && (now - lastBatteryUIUpdateTime < 30000)) {
         return;
     }
 
@@ -342,9 +363,11 @@ void updateBatteryUI(bool force) {
     lastBatteryUIState = state;
     lastBLEUIOn = bleOn;
     lastBLEUIConn = bleConn;
+    lastWiFiUIOn = wifiOn;
+    lastWiFiUIConn = wifiConn;
 
-    if (bleChanged && currentAppState == APP_STATE_MAIN_MENU) {
-        refreshMainMenuBLEState(false);
+    if (wirelessChanged && currentAppState == APP_STATE_MAIN_MENU) {
+        refreshMainMenuWirelessState(false);
     }
 
     uint8_t pct = getBatteryPercentage();
@@ -382,7 +405,8 @@ void updateBatteryUI(bool force) {
         snprintf(pctStr, sizeof(pctStr), "%d%%", pct);
     }
 
-    lv_color_t bleCol = bleConn ? lv_color_hex(0x2196F3) : UI_COLOR_TEXT_DIM; // Bright blue when connected!
+    lv_color_t bleCol = bleConn ? lv_color_hex(0x2196F3) : UI_COLOR_TEXT_DIM;
+    lv_color_t wifiCol = wifiConn ? lv_color_hex(0x2196F3) : UI_COLOR_TEXT_DIM;
 
     for (size_t i = 0; i < numBatteryIndicators; i++) {
         if (batteryIndicators[i].icon != nullptr && lv_obj_is_valid(batteryIndicators[i].icon)) {
@@ -400,27 +424,44 @@ void updateBatteryUI(bool force) {
                 }
             }
         }
-        if (batteryIndicators[i].ble != nullptr && lv_obj_is_valid(batteryIndicators[i].ble)) {
-            if (bleOn) {
-                lv_obj_clear_flag(batteryIndicators[i].ble, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_set_style_text_color(batteryIndicators[i].ble, bleCol, 0);
-                if (batteryIndicators[i].bleRight) {
-                    if (batteryIndicators[i].pct != nullptr && lv_obj_is_valid(batteryIndicators[i].pct)) {
-                        lv_obj_align_to(batteryIndicators[i].ble, batteryIndicators[i].pct, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
-                    } else if (batteryIndicators[i].icon != nullptr && lv_obj_is_valid(batteryIndicators[i].icon)) {
-                        lv_obj_align_to(batteryIndicators[i].ble, batteryIndicators[i].icon, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
-                    }
-                } else {
-                    if (batteryIndicators[i].pct != nullptr && lv_obj_is_valid(batteryIndicators[i].pct)) {
-                        lv_obj_align_to(batteryIndicators[i].ble, batteryIndicators[i].pct, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
-                    } else if (batteryIndicators[i].icon != nullptr && lv_obj_is_valid(batteryIndicators[i].icon)) {
-                        lv_obj_align_to(batteryIndicators[i].ble, batteryIndicators[i].icon, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
+        if (batteryIndicators[i].wireless != nullptr && lv_obj_is_valid(batteryIndicators[i].wireless)) {
+            const char* wSym = nullptr;
+            const lv_font_t* wFont = nullptr;
+            lv_color_t wCol = UI_COLOR_TEXT_DIM;
+
+            if (wifiOn) {
+                wSym = LV_SYMBOL_WIFI;
+                wFont = &lv_font_montserrat_10;
+                wCol = wifiCol;
+            } else if (bleOn) {
+                wSym = UI_SYMBOL_BLUETOOTH;
+                wFont = &ui_font_bluetooth;
+                wCol = bleCol;
+            }
+
+            if (wSym != nullptr) {
+                lv_label_set_text(batteryIndicators[i].wireless, wSym);
+                lv_obj_set_style_text_font(batteryIndicators[i].wireless, wFont, 0);
+                lv_obj_clear_flag(batteryIndicators[i].wireless, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_set_style_text_color(batteryIndicators[i].wireless, wCol, 0);
+
+                lv_obj_t* anchor = (batteryIndicators[i].pct != nullptr && lv_obj_is_valid(batteryIndicators[i].pct))
+                                   ? batteryIndicators[i].pct : batteryIndicators[i].icon;
+                if (anchor != nullptr && lv_obj_is_valid(anchor)) {
+                    if (batteryIndicators[i].bleRight) {
+                        lv_obj_align_to(batteryIndicators[i].wireless, anchor, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
+                    } else {
+                        lv_obj_align_to(batteryIndicators[i].wireless, anchor, LV_ALIGN_OUT_LEFT_MID, BLE_ICON_SPACING_X, 0);
                     }
                 }
             } else {
-                lv_obj_add_flag(batteryIndicators[i].ble, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(batteryIndicators[i].wireless, LV_OBJ_FLAG_HIDDEN);
             }
         }
+    }
+
+    if (currentAppState == APP_STATE_SETTINGS) {
+        updateSettingsValues();
     }
 }
 
@@ -450,10 +491,12 @@ void initUI() {
     buildMainMenuScreen();
     buildSettingsScreen();
     buildBrightnessScreen();
+    buildEmissivityScreen();
     buildScalingScreen();
     buildResetScreen();
     buildThermalRangeScreen();
     buildErrorScreen();
+    buildWiFiStreamScreen();
 
     // Initial state: Boot Screen
     currentAppState = APP_STATE_BOOT;
@@ -567,8 +610,27 @@ bool getBLEEnabledSetting() {
 void setBLEEnabledSetting(bool enabled) {
     if (currentBLESetting != enabled) {
         currentBLESetting = enabled;
+        if (enabled && currentWiFiSetting) {
+            setWiFiStreamingSetting(false);
+        }
         setBLEEnabled(enabled);
         markSettingsDirty();
+        updateSettingsValues();
+        updateBatteryUI(true);
+    }
+}
+bool getWiFiStreamingSetting() {
+    return currentWiFiSetting;
+}
+void setWiFiStreamingSetting(bool enabled) {
+    if (currentWiFiSetting != enabled) {
+        currentWiFiSetting = enabled;
+        if (enabled && currentBLESetting) {
+            setBLEEnabledSetting(false);
+        }
+        setWiFiStreamingEnabled(enabled);
+        markSettingsDirty();
+        updateSettingsValues();
         updateBatteryUI(true);
     }
 }
@@ -598,6 +660,26 @@ void setManualMaxTempSetting(float maxC) {
         manualMaxTemp = maxC;
         markSettingsDirty();
     }
+}
+float getEmissivitySetting() {
+    return currentEmissivitySetting;
+}
+void setEmissivitySetting(float emi) {
+    if (emi < 0.05f) emi = 0.05f;
+    if (emi > 1.00f) emi = 1.00f;
+    if (std::abs(currentEmissivitySetting - emi) > 0.002f) {
+        currentEmissivitySetting = emi;
+        markSettingsDirty();
+    }
+}
+const char* getEmissivityPresetName(float emi) {
+    if (std::abs(emi - 0.95f) < 0.015f) return "Matte (0.95)";
+    if (std::abs(emi - 0.98f) < 0.015f) return "Skin (0.98)";
+    if (std::abs(emi - 0.90f) < 0.015f) return "Wood (0.90)";
+    if (std::abs(emi - 0.80f) < 0.015f) return "Oxidized (0.80)";
+    if (std::abs(emi - 0.60f) < 0.015f) return "Cast Iron (0.60)";
+    if (std::abs(emi - 0.20f) < 0.015f) return "Polished (0.20)";
+    return "Custom";
 }
 
 // Temperature conversion helpers
@@ -704,9 +786,9 @@ void uiNavToThermal() {
         updateBatteryUI(true);
     }
 
-    // Quick crossfade (100 ms) between thermal feed and main menu
-    lv_scr_load_anim(screen_thermal, LV_SCR_LOAD_ANIM_FADE_ON, 100, 0, false);
-    Serial.println("[UI] Transitioned to Live Thermal View (100ms Crossfade)");
+    // Quick crossfade (120 ms) into live thermal view
+    lv_scr_load_anim(screen_thermal, LV_SCR_LOAD_ANIM_FADE_ON, 120, 0, false);
+    Serial.println("[UI] Transitioned to Live Thermal View (120ms Fade)");
 }
 
 void uiFreezeThermal() {
@@ -746,8 +828,8 @@ void uiNavToPPT() {
     WheelEventType dummy;
     while (getWheelEvent(dummy, 0)) { }
 
-    lv_scr_load_anim(screen_ppt, LV_SCR_LOAD_ANIM_FADE_ON, 100, 0, false);
-    Serial.println("[UI] Transitioned to Dedicated PPT Screen (Look-Around Mode, 100ms Crossfade)");
+    lv_scr_load_anim(screen_ppt, LV_SCR_LOAD_ANIM_FADE_ON, 120, 0, false);
+    Serial.println("[UI] Transitioned to Dedicated PPT Screen (120ms Fade)");
 }
 
 void uiNavToMainMenu() {
@@ -759,7 +841,7 @@ void uiNavToMainMenu() {
     }
 
     // Persist settings if exiting Settings or its dedicated sub-pages
-    if (prevState == APP_STATE_SETTINGS || prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS || prevState == APP_STATE_RESET_CONFIRM || prevState == APP_STATE_THERMAL_RANGE) {
+    if (prevState == APP_STATE_SETTINGS || prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS || prevState == APP_STATE_EMISSIVITY || prevState == APP_STATE_RESET_CONFIRM || prevState == APP_STATE_THERMAL_RANGE || prevState == APP_STATE_WIFI_STREAM) {
         saveSettingsIfDirty();
     }
 
@@ -768,24 +850,19 @@ void uiNavToMainMenu() {
     if (prevState == APP_STATE_PPT_ARMED || prevState == APP_STATE_PPT_ACQUIRING || prevState == APP_STATE_PPT_INSPECT) {
         setSensorI2CSpeed(currentI2CSpeedSetting);
     }
-    refreshMainMenuBLEState(true);
+    refreshMainMenuWirelessState(true);
 
     WheelEventType dummy;
     while (getWheelEvent(dummy, 0)) { }
 
-    if (prevState == APP_STATE_SETTINGS || prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS || prevState == APP_STATE_RESET_CONFIRM || prevState == APP_STATE_THERMAL_RANGE) {
-        // Between menu screens: fast slide transition (100ms)
-        lv_scr_load_anim(screen_main_menu, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 100, 0, false);
-    } else {
-        // Between thermal feed and main menu: quick crossfade (100ms)
-        lv_scr_load_anim(screen_main_menu, LV_SCR_LOAD_ANIM_FADE_ON, 100, 0, false);
-    }
-    Serial.println("[UI] Transitioned to Main Menu");
+    lv_scr_load_anim(screen_main_menu, LV_SCR_LOAD_ANIM_FADE_ON, 120, 0, false);
+    Serial.println("[UI] Transitioned to Main Menu (120ms Fade)");
 }
 
 void uiNavToSettings(int focusIndex) {
     AppState prevState = currentAppState;
     currentAppState = APP_STATE_SETTINGS;
+    updateSettingsValues();
     lv_group_remove_all_objs(ui_wheel_group);
 
     for (int i = 0; i < SETTINGS_COUNT; ++i) {
@@ -800,22 +877,7 @@ void uiNavToSettings(int focusIndex) {
         }
     }
     lv_group_focus_obj(settingsBtns[focusIndex]);
-    if (settings_desc_label != nullptr) {
-        if (focusIndex == SETTING_BLUETOOTH) {
-            char bleDesc[140];
-            if (!getBLEEnabledSetting()) {
-                snprintf(bleDesc, sizeof(bleDesc), "Bluetooth is OFF (saves ~35-45 mA / ~12%% battery). Click to enable wireless telemetry.");
-            } else if (isBLEConnected()) {
-                const char* client = getBLEConnectedClientInfo();
-                snprintf(bleDesc, sizeof(bleDesc), "Connected to: %s. Streaming live battery & thermal telemetry.", (client && client[0]) ? client : "Device");
-            } else {
-                snprintf(bleDesc, sizeof(bleDesc), "Bluetooth ON: Advertising as 'thermophase'. Streams live telemetry to Web Terminal.");
-            }
-            lv_label_set_text(settings_desc_label, bleDesc);
-        } else {
-            lv_label_set_text(settings_desc_label, settingsDescriptions[focusIndex]);
-        }
-    }
+    updateSettingsDescription(focusIndex);
     if (settings_list != nullptr) {
         if (focusIndex == 0) {
             lv_obj_scroll_to_y(settings_list, 0, LV_ANIM_OFF);
@@ -827,14 +889,8 @@ void uiNavToSettings(int focusIndex) {
     WheelEventType dummy;
     while (getWheelEvent(dummy, 0)) { }
 
-    if (prevState == APP_STATE_SCALING_MENU || prevState == APP_STATE_BRIGHTNESS || prevState == APP_STATE_RESET_CONFIRM || prevState == APP_STATE_THERMAL_RANGE) {
-        // Subpage back to settings: slide right
-        lv_scr_load_anim(screen_settings, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 100, 0, false);
-    } else {
-        // Main menu to settings: slide left
-        lv_scr_load_anim(screen_settings, LV_SCR_LOAD_ANIM_MOVE_LEFT, 100, 0, false);
-    }
-    Serial.println("[UI] Transitioned to Settings (100ms Slide)");
+    lv_scr_load_anim(screen_settings, LV_SCR_LOAD_ANIM_FADE_ON, 120, 0, false);
+    Serial.println("[UI] Transitioned to Settings (120ms Fade)");
 }
 
 void uiNavToResetConfirm() {
@@ -847,9 +903,8 @@ void uiNavToResetConfirm() {
     WheelEventType dummy;
     while (getWheelEvent(dummy, 0)) { }
 
-    // Slide left into confirmation screen
-    lv_scr_load_anim(screen_reset, LV_SCR_LOAD_ANIM_MOVE_LEFT, 100, 0, false);
-    Serial.println("[UI] Transitioned to Reset Confirmation Screen (100ms Slide)");
+    lv_scr_load_anim(screen_reset, LV_SCR_LOAD_ANIM_FADE_ON, 120, 0, false);
+    Serial.println("[UI] Transitioned to Reset Confirmation Screen (120ms Fade)");
 }
 
 void uiNavToBrightness() {
@@ -861,9 +916,21 @@ void uiNavToBrightness() {
     WheelEventType dummy;
     while (getWheelEvent(dummy, 0)) { }
 
-    // Slide left into brightness subpage
-    lv_scr_load_anim(screen_brightness, LV_SCR_LOAD_ANIM_MOVE_LEFT, 100, 0, false);
-    Serial.println("[UI] Transitioned to Brightness Menu (100ms Slide)");
+    lv_scr_load_anim(screen_brightness, LV_SCR_LOAD_ANIM_FADE_ON, 120, 0, false);
+    Serial.println("[UI] Transitioned to Brightness Menu (120ms Fade)");
+}
+
+void uiNavToEmissivity() {
+    currentAppState = APP_STATE_EMISSIVITY;
+    lv_group_remove_all_objs(ui_wheel_group);
+
+    setupEmissivityGroup();
+
+    WheelEventType dummy;
+    while (getWheelEvent(dummy, 0)) { }
+
+    lv_scr_load_anim(screen_emissivity, LV_SCR_LOAD_ANIM_FADE_ON, 120, 0, false);
+    Serial.println("[UI] Transitioned to Emissivity Menu (120ms Fade)");
 }
 
 void uiNavToScalingMenu() {
@@ -896,9 +963,8 @@ void uiNavToScalingMenu() {
     WheelEventType dummy;
     while (getWheelEvent(dummy, 0)) { }
 
-    // Slide left into subpage
-    lv_scr_load_anim(screen_scaling, LV_SCR_LOAD_ANIM_MOVE_LEFT, 100, 0, false);
-    Serial.println("[UI] Transitioned to Scaling Menu (100ms Slide)");
+    lv_scr_load_anim(screen_scaling, LV_SCR_LOAD_ANIM_FADE_ON, 120, 0, false);
+    Serial.println("[UI] Transitioned to Scaling Menu (120ms Fade)");
 }
 
 static AppState s_rangeCaller = APP_STATE_THERMAL_VIEW;
@@ -907,6 +973,7 @@ void uiNavToThermalRange(AppState caller) {
     s_rangeCaller = caller;
     AppState prevState = currentAppState;
     currentAppState = APP_STATE_THERMAL_RANGE;
+
     lv_group_remove_all_objs(ui_wheel_group);
 
     setupThermalRangeGroup();
@@ -914,9 +981,8 @@ void uiNavToThermalRange(AppState caller) {
     WheelEventType dummy;
     while (getWheelEvent(dummy, 0)) { }
 
-    // Slide left into thermal range subpage
-    lv_scr_load_anim(screen_thermal_range, LV_SCR_LOAD_ANIM_MOVE_LEFT, 100, 0, false);
-    Serial.println("[UI] Transitioned to Thermal Range Menu (100ms Slide)");
+    lv_scr_load_anim(screen_thermal_range, LV_SCR_LOAD_ANIM_FADE_ON, 120, 0, false);
+    Serial.println("[UI] Transitioned to Thermal Range Menu (120ms Fade)");
 }
 
 AppState getThermalRangeCaller() {
@@ -928,7 +994,7 @@ void uiNavToSensorError(uint32_t attemptCount) {
     lv_group_remove_all_objs(ui_wheel_group);
     resetSensorErrorAttempt();
     updateSensorErrorAttempt(attemptCount);
-    lv_scr_load_anim(screen_error, LV_SCR_LOAD_ANIM_FADE_ON, 100, 0, false);
+    lv_scr_load_anim(screen_error, LV_SCR_LOAD_ANIM_FADE_ON, 120, 0, false);
 }
 
 void uiDismissSensorError() {

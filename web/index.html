@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>THERMOPHASE | Live Thermal Camera Wi-Fi Stream</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="container">
+  <header>
+    <div class="title-area">
+      <h1><span class="accent">&#x25A0;</span> THERMOPHASE <span class="sub-title">[ WI-FI STREAM ]</span></h1>
+    </div>
+    <div class="header-badges">
+      <span class="badge badge-ip" id="ipBadge">[ 192.168.4.1 ]</span>
+      <span class="badge badge-ws" id="wsBadge">[ WS CONNECTING... ]</span>
+      <span class="badge badge-live" id="connBadge">[ AP HOSTING ]</span>
+    </div>
+  </header>
+
+  <div class="grid">
+    <!-- 1. STREAM & VIEWPORT -->
+    <div class="card stream-box">
+      <div class="card-title" style="width:100%;">
+        <span><span class="accent">&#x25A0;</span> LIVE THERMAL CAMERA FEED</span>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <span class="badge badge-live" id="feedBadge">[ LIVE STREAM ]</span>
+        </div>
+      </div>
+
+      <div class="stream-stage">
+        <div class="viewport-wrapper" id="viewportWrapper">
+          <canvas id="thermalCanvas" class="thermal-canvas" width="480" height="640"></canvas>
+          <div class="reticle" id="reticle"></div>
+          
+          <!-- HUD Badges -->
+          <div class="hud-badge hud-spot" id="hudSpot">--.- &deg;C</div>
+          <div class="hud-badge hud-probe" id="hudProbe">PROBE: --.- &deg;C</div>
+          <div class="hud-badge hud-rec" id="hudRec" style="display:none;"><span class="rec-dot"></span> REC <span id="recTime">00:00</span></div>
+          <div class="hud-badge hud-fps" id="hudFps">0.0 FPS</div>
+          <div class="hud-badge hud-min" id="hudMin">MIN: --.- &deg;C</div>
+          <div class="hud-badge hud-mode" id="hudMode">AUTO RANGE</div>
+          <div class="hud-badge hud-max" id="hudMax">MAX: --.- &deg;C</div>
+
+          <!-- Video Connection Trouble Overlay Banner -->
+          <div class="stream-alert" id="streamAlert" style="display:none;">
+            <div class="alert-icon">&#x26A0;</div>
+            <div class="alert-content">
+              <div class="alert-title" id="alertTitle">CONNECTION TROUBLE</div>
+              <div class="alert-sub" id="alertSub">Attempting to reconnect...</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="colorbar-wrapper">
+          <canvas id="colorbarCanvas" class="colorbar-canvas" width="14" height="640"></canvas>
+          <div class="colorbar-labels">
+            <span id="cbMax">--.-&deg;</span>
+            <span id="cbMid">--.-&deg;</span>
+            <span id="cbMin">--.-&deg;</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Clean Action Bar: Only Record, Capture Pic, and Settings Menu -->
+      <div class="controls-bar">
+        <button type="button" id="btnRecord" class="ctrl-btn ctrl-btn-record"><span class="rec-icon">&#x25A0;</span> Record Video</button>
+        <button type="button" id="btnCapture" class="ctrl-btn ctrl-btn-capture">&#x1F4F7; Capture Photo</button>
+        <button type="button" id="btnSettingsToggle" class="ctrl-btn ctrl-btn-settings">&#x2699; Settings &#x25BE;</button>
+      </div>
+
+      <!-- Collapsible Settings Menu Drawer -->
+      <div class="settings-drawer" id="settingsDrawer" style="display:none;">
+        <div class="settings-drawer-title">
+          <span><span class="accent">&#x25A0;</span> STREAM &amp; PROCESSING SETTINGS</span>
+          <button type="button" class="drawer-close-btn" id="btnSettingsClose" title="Close Settings">&times;</button>
+        </div>
+        <div class="settings-grid">
+          <div class="ctrl-item">
+            <label for="paletteSelect">Palette:</label>
+            <select id="paletteSelect" class="ctrl-select">
+              <option value="IRONBOW" selected>Ironbow (FLIR)</option>
+              <option value="WHITE_HOT">White-Hot (Monochrome)</option>
+              <option value="RAINBOW">Rainbow (Classic)</option>
+            </select>
+          </div>
+
+          <div class="ctrl-item">
+            <label for="scalingSelect">Scaling:</label>
+            <select id="scalingSelect" class="ctrl-select">
+              <option value="TAAU" selected>TAAU (Temporal)</option>
+              <option value="BICUBIC">Bicubic</option>
+              <option value="BILINEAR">Bilinear</option>
+              <option value="NEAREST">Nearest</option>
+            </select>
+          </div>
+
+          <div class="ctrl-item" id="sharpnessCtrl">
+            <label for="sharpnessSelect">Sharpness:</label>
+            <select id="sharpnessSelect" class="ctrl-select">
+              <option value="0.0">Off (Soft)</option>
+              <option value="0.25">Subtle</option>
+              <option value="0.45" selected>Default (0.45)</option>
+              <option value="0.7">High</option>
+              <option value="1.0">Crisp</option>
+            </select>
+          </div>
+
+          <div class="ctrl-item">
+            <label for="rotationSelect">Rotation:</label>
+            <select id="rotationSelect" class="ctrl-select">
+              <option value="90" selected>90&deg; (Default)</option>
+              <option value="0">0&deg; Landscape</option>
+              <option value="180">180&deg;</option>
+              <option value="270">270&deg;</option>
+            </select>
+          </div>
+
+          <div class="ctrl-item settings-toggles-item">
+            <label>Image Filters:</label>
+            <div class="filter-btns-row">
+              <button type="button" id="btnDenoise" class="ctrl-btn active">Denoise: ON</button>
+              <button type="button" id="btnFlip" class="ctrl-btn active">Flip: V</button>
+            </div>
+          </div>
+
+          <!-- Thermal Range Calibration Section -->
+          <div class="ctrl-item settings-section-item">
+            <div class="section-sub-title"><span class="accent">&#x25A0;</span> THERMAL RANGE CALIBRATION</div>
+            <div class="range-mode-toggle-group">
+              <button type="button" id="btnRangeAuto" class="range-mode-btn active">&#x25CF; AUTO RANGE</button>
+              <button type="button" id="btnRangeManual" class="range-mode-btn">&#x25CB; MANUAL RANGE</button>
+            </div>
+            <div class="manual-range-controls" id="manualRangeControls" style="display:none;">
+              <div class="manual-inputs-grid">
+                <div class="manual-input-box">
+                  <label for="manualMinInput">Min Temp (&deg;C):</label>
+                  <div class="stepper-row">
+                    <button type="button" class="stepper-btn" id="btnMinMinus">&minus;1&deg;</button>
+                    <input type="number" id="manualMinInput" class="ctrl-input-number" min="-20" max="298" step="0.5" value="20.0">
+                    <button type="button" class="stepper-btn" id="btnMinPlus">+1&deg;</button>
+                  </div>
+                </div>
+                <div class="manual-input-box">
+                  <label for="manualMaxInput">Max Temp (&deg;C):</label>
+                  <div class="stepper-row">
+                    <button type="button" class="stepper-btn" id="btnMaxMinus">&minus;1&deg;</button>
+                    <input type="number" id="manualMaxInput" class="ctrl-input-number" min="-18" max="300" step="0.5" value="50.0">
+                    <button type="button" class="stepper-btn" id="btnMaxPlus">+1&deg;</button>
+                  </div>
+                </div>
+              </div>
+              <button type="button" id="btnApplyRange" class="ctrl-btn ctrl-btn-apply">&#x2714; APPLY MANUAL RANGE</button>
+            </div>
+          </div>
+
+          <!-- Surface Emissivity Section -->
+          <div class="ctrl-item settings-section-item">
+            <div class="section-sub-title">
+              <span><span class="accent">&#x25A0;</span> SURFACE EMISSIVITY (&epsilon;)</span>
+              <span class="emi-val-badge" id="emiValBadge">&epsilon; = 0.95 (Matte)</span>
+            </div>
+            <div class="emi-slider-wrap">
+              <input type="range" id="emissivitySlider" class="ctrl-slider" min="0.10" max="1.00" step="0.01" value="0.95">
+              <div class="slider-ticks">
+                <span>0.10 (Shiny)</span>
+                <span>0.50</span>
+                <span>0.95 (Matte)</span>
+                <span>1.00</span>
+              </div>
+            </div>
+            <div class="preset-chips-grid">
+              <button type="button" class="preset-chip active" data-emi="0.95">Matte (0.95)</button>
+              <button type="button" class="preset-chip" data-emi="0.98">Skin (0.98)</button>
+              <button type="button" class="preset-chip" data-emi="0.90">Wood (0.90)</button>
+              <button type="button" class="preset-chip" data-emi="0.80">Oxidized (0.80)</button>
+              <button type="button" class="preset-chip" data-emi="0.60">Cast Iron (0.60)</button>
+              <button type="button" class="preset-chip" data-emi="0.20">Polished (0.20)</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. THERMAL SENSOR TELEMETRY -->
+    <div class="card">
+      <div class="card-title"><span><span class="accent">&#x25A0;</span> THERMAL SENSOR TELEMETRY</span></div>
+      <div class="stat-row"><span class="stat-label">Range Mode:</span><span class="stat-val val-green" id="statRangeMode">AUTO</span></div>
+      <div class="stat-row"><span class="stat-label">Palette Range:</span><span class="stat-val" id="statPaletteRange">--.- &deg;C to --.- &deg;C</span></div>
+      <div class="stat-row"><span class="stat-label">Spot Temperature:</span><span class="stat-val val-accent" id="statSpot">--.-</span></div>
+      <div class="stat-row"><span class="stat-label">Cursor Probe:</span><span class="stat-val val-cyan" id="statProbe">--.-</span></div>
+      <div class="stat-row"><span class="stat-label">Scene Min Temp:</span><span class="stat-val val-cyan" id="statMin">--.-</span></div>
+      <div class="stat-row"><span class="stat-label">Scene Max Temp:</span><span class="stat-val val-orange" id="statMax">--.-</span></div>
+      <div class="stat-row"><span class="stat-label">Dynamic Span:</span><span class="stat-val" id="statSpan">--.-</span></div>
+      <div class="stat-row"><span class="stat-label">Surface Emissivity:</span><span class="stat-val val-yellow" id="statEmissivity">0.95 (Matte)</span></div>
+      <div class="stat-row"><span class="stat-label">Acquisition Rate:</span><span class="stat-val val-green" id="statFps">--.- FPS</span></div>
+      <div class="stat-row"><span class="stat-label">Active Scaling:</span><span class="stat-val" id="statScaling">TAAU</span></div>
+      <div class="stat-row"><span class="stat-label">Color Palette:</span><span class="stat-val" id="statPalette">Ironbow</span></div>
+    </div>
+
+    <!-- 3. DEVICE STATUS & HARDWARE -->
+    <div class="card">
+      <div class="card-title"><span><span class="accent">&#x25A0;</span> DEVICE STATUS &amp; HARDWARE</span></div>
+      <div class="stat-row"><span class="stat-label">Battery Level:</span><span class="stat-val val-green" id="statBatt">--%</span></div>
+      <div class="stat-row"><span class="stat-label">Battery Voltage:</span><span class="stat-val" id="statVolt">-.--- V</span></div>
+      <div class="stat-row"><span class="stat-label">Power State:</span><span class="stat-val" id="statPwr">--</span></div>
+      <div class="stat-row"><span class="stat-label">Connected Stations:</span><span class="stat-val" id="statClients">0</span></div>
+      <div class="stat-row"><span class="stat-label">Free DRAM:</span><span class="stat-val" id="statHeap">-- KB</span></div>
+      <div class="stat-row"><span class="stat-label">Free PSRAM:</span><span class="stat-val" id="statPsram">-- KB</span></div>
+      <div class="stat-row"><span class="stat-label">System Uptime:</span><span class="stat-val" id="statUptime">-- s</span></div>
+    </div>
+
+    <!-- 4. LIVE SERIAL TERMINAL (Fixed Height, Scrollable, CRT Green) -->
+    <div class="card terminal-card">
+      <div class="card-title">
+        <span><span class="accent">&#x25A0;</span> LIVE SERIAL TERMINAL</span>
+        <div class="term-status-group">
+          <span class="term-status-dot" id="termDot"></span>
+          <span class="badge badge-term" id="termBadge">[ LINK ACTIVE ]</span>
+        </div>
+      </div>
+      <div class="terminal-body" id="terminalBody">
+        <div class="terminal-output" id="terminalOutput"></div>
+      </div>
+      <div class="terminal-quick-bar">
+        <button type="button" class="term-chip" data-cmd="help">help</button>
+        <button type="button" class="term-chip" data-cmd="diagnostics">diag</button>
+        <button type="button" class="term-chip" data-cmd="compute">compute</button>
+        <button type="button" class="term-chip" data-cmd="status">status</button>
+        <button type="button" class="term-chip" data-cmd="click">click</button>
+        <button type="button" class="term-chip" data-cmd="up">up</button>
+        <button type="button" class="term-chip" data-cmd="down">down</button>
+        <button type="button" class="term-chip term-chip-clear" id="btnTermClear">clear</button>
+      </div>
+      <form class="terminal-input-bar" id="termForm">
+        <span class="term-prompt">&gt;</span>
+        <input type="text" id="termInput" class="term-input" placeholder="Type command..." autocomplete="off" autocapitalize="none" spellcheck="false">
+        <button type="submit" class="term-send-btn" id="termSendBtn">Send</button>
+      </form>
+    </div>
+  </div>
+
+  <footer>
+    ESP32-S3 Thermal Camera &bull; SoftAP: thermophase AP &bull; High-Speed Wi-Fi Stream
+  </footer>
+</div>
+
+<script src="scaler.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
+

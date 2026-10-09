@@ -10,8 +10,8 @@ static int16_t (*transient_cube)[PPT_PIXELS] = nullptr;
 // Pre-computed Spectral Phasegram Session Buffer (~62 KB)
 static PPTSpectralSession* s_activeSession = nullptr;
 
-// Rolling 8-frame ring buffer for pre-trigger transient lock (~12.3 KB)
-static int16_t ringBuffer[PPT_RING_FRAMES][PPT_PIXELS];
+// Rolling 8-frame ring buffer for pre-trigger transient lock (~12.3 KB, allocated in PSRAM)
+static int16_t (*ringBuffer)[PPT_PIXELS] = nullptr;
 static int ringHead = 0;
 static int ringCount = 0;
 
@@ -21,14 +21,14 @@ static volatile uint8_t acquiredFrames = 0;
 static volatile float currentDt = 0.0f;
 static volatile bool manualTriggerFlag = false;
 
-// Previous frame temperatures for rate-of-rise (dT/dt) detection
-static float prevTemps[PPT_PIXELS];
+// Previous frame temperatures for rate-of-rise (dT/dt) detection (allocated in PSRAM)
+static float* prevTemps = nullptr;
 static bool hasPrevTemps = false;
 
-// Phase map storage
+// Phase map storage (allocated in PSRAM)
 static int currentBinK = PPT_DEFAULT_BIN;
-static float phaseGrid[PPT_PIXELS];           // Raw phase angles in radians [-pi, +pi]
-static float normalizedPhaseGrid[PPT_PIXELS]; // 0.0f - 255.0f scalar array for spatial upscaler
+static float* phaseGrid = nullptr;           // Raw phase angles in radians [-pi, +pi]
+static float* normalizedPhaseGrid = nullptr; // 0.0f - 255.0f scalar array for spatial upscaler
 
 static float phaseMinVal = -3.14159265f;
 static float phaseMaxVal = 3.14159265f;
@@ -36,6 +36,28 @@ static float phaseCenterVal = 0.0f;
 
 bool initPPT() {
     Serial.println("[PPT] Initializing Pulsed Phase Thermography engine...");
+
+    // Allocate ring buffer and phase grids in PSRAM (saving ~21.3 KB internal DRAM)
+    if (ringBuffer == nullptr) {
+        ringBuffer = (int16_t(*)[PPT_PIXELS])heap_caps_malloc(
+            sizeof(int16_t) * PPT_RING_FRAMES * PPT_PIXELS,
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
+        );
+    }
+    if (prevTemps == nullptr) {
+        prevTemps = (float*)heap_caps_malloc(sizeof(float) * PPT_PIXELS, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (phaseGrid == nullptr) {
+        phaseGrid = (float*)heap_caps_malloc(sizeof(float) * PPT_PIXELS, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (normalizedPhaseGrid == nullptr) {
+        normalizedPhaseGrid = (float*)heap_caps_malloc(sizeof(float) * PPT_PIXELS, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+
+    if (!ringBuffer || !prevTemps || !phaseGrid || !normalizedPhaseGrid) {
+        Serial.println("[PPT] FATAL: Could not allocate PPT working buffers in PSRAM!");
+        return false;
+    }
 
     // Allocate 3D transient cube in 8MB Octal PSRAM
     if (transient_cube == nullptr) {
@@ -78,7 +100,9 @@ bool initPPT() {
         }
     }
 
-    memset(ringBuffer, 0, sizeof(ringBuffer));
+    if (ringBuffer) {
+        memset(ringBuffer, 0, sizeof(int16_t) * PPT_RING_FRAMES * PPT_PIXELS);
+    }
     ringHead = 0;
     ringCount = 0;
     currentPPTMode = PPT_MODE_IDLE;

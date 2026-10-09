@@ -2,6 +2,7 @@
 #include "diagnostics.hpp"
 #include "ppt.hpp"
 #include "ble.hpp"
+#include "wifi.hpp"
 #include "ui.hpp"
 #include <esp_timer.h>
 #include <algorithm>
@@ -236,6 +237,41 @@ void filterSnapshotFrame(const float* src, float* dst) {
     }
 }
 
+// Stefan-Boltzmann radiometric emissivity compensation:
+// MLX90640 measures total apparent radiated heat flux, calibrated at default epsilon0 = 0.95.
+// Conservation of thermal radiant energy:
+//   W_total = eps * sigma * T_true^4 + (1 - eps) * sigma * T_refl^4
+// When evaluated at sensor default (eps0 = 0.95):
+//   W_total = eps0 * sigma * T_meas^4 + (1 - eps0) * sigma * T_refl^4
+// Equating both equations and solving for T_true (in Kelvin):
+//   T_true = [ (eps0 / eps) * T_meas^4 - ((eps0 / eps) - 1) * T_refl^4 ]^(1/4)
+void applyEmissivityCompensation(float* temps, size_t count, float emissivity, float reflectedTempC) {
+    if (std::abs(emissivity - 0.95f) < 0.005f) return;
+    if (emissivity < 0.05f) emissivity = 0.05f;
+    if (emissivity > 1.00f) emissivity = 1.00f;
+
+    const float eps0 = 0.95f;
+    const float ratio = eps0 / emissivity;
+    const float reflK = reflectedTempC + 273.15f;
+    const float reflK2 = reflK * reflK;
+    const float reflK4 = reflK2 * reflK2;
+    const float offset = (ratio - 1.0f) * reflK4;
+
+    for (size_t i = 0; i < count; ++i) {
+        float tC = temps[i];
+        if (!std::isfinite(tC)) continue;
+        float tK = tC + 273.15f;
+        if (tK < 1.0f) tK = 1.0f;
+        float tK2 = tK * tK;
+        float tK4 = tK2 * tK2;
+        float trueK4 = ratio * tK4 - offset;
+        if (trueK4 > 1.0f) {
+            float trueK = sqrtf(sqrtf(trueK4));
+            temps[i] = trueK - 273.15f;
+        }
+    }
+}
+
 static bool globalLiveDenoiseEnabled = true;
 
 void setLiveDenoiseEnabled(bool enabled) {
@@ -423,7 +459,15 @@ void thermalSensorTask(void *pvParameters) {
                 localFrame.temperatures[i] += frameCorrection;
             }
 
-            // 2. Spatial noise filtering and outlier rejection for stable, accurate telemetry
+            // 2.1 Radiometric Emissivity Radiation Compensation
+            float emi = getEmissivitySetting();
+            if (std::abs(emi - 0.95f) > 0.005f) {
+                float ta = mlx.getTa(false);
+                float reflectedTempC = (std::isfinite(ta) && ta > -20.0f && ta < 80.0f) ? (ta - 8.0f) : 23.0f;
+                applyEmissivityCompensation(localFrame.temperatures, SENSOR_PIXELS, emi, reflectedTempC);
+            }
+
+            // 3. Spatial noise filtering and outlier rejection for stable, accurate telemetry
             static float spatiallyFilteredGrid[SENSOR_PIXELS];
             filterPeakPreservingMedian(localFrame.temperatures, spatiallyFilteredGrid);
 
@@ -516,16 +560,27 @@ void thermalSensorTask(void *pvParameters) {
 
             postThermalFrame(localFrame);
 
-            // Stream over BLE if streaming is active and BLE is connected
-            if (isBLEStreaming() && isBLEConnected()) {
+            // Stream over BLE or Wi-Fi if wireless streaming is active
+            bool bleStream = isBLEStreaming() && isBLEConnected();
+            bool wifiStream = isWiFiStreamingActive();
+            if (bleStream || wifiStream) {
                 float effMin = 0.0f;
                 float effRange = 0.0f;
                 computeEffectiveThermalRange(localFrame.minTemp, localFrame.maxTemp, effMin, effRange);
                 uint8_t rangeMode = (uint8_t)getThermalRangeModeSetting();
-                streamThermalFrameBLE(localFrame.temperatures, SENSOR_PIXELS,
-                                      effMin, effMin + effRange,
-                                      rangeMode,
-                                      localFrame.frameIndex);
+
+                if (bleStream) {
+                    streamThermalFrameBLE(localFrame.temperatures, SENSOR_PIXELS,
+                                          effMin, effMin + effRange,
+                                          rangeMode,
+                                          localFrame.frameIndex);
+                }
+                if (wifiStream) {
+                    streamThermalFrameWiFi(localFrame.temperatures, SENSOR_PIXELS,
+                                           effMin, effMin + effRange,
+                                           rangeMode,
+                                           localFrame.frameIndex);
+                }
             }
 
             // Feed into PPT engine if armed or acquiring

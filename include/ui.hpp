@@ -12,13 +12,15 @@ enum AppState {
     APP_STATE_MAIN_MENU,        // Main menu navigation screen
     APP_STATE_SETTINGS,         // Settings & configuration screen
     APP_STATE_BRIGHTNESS,       // Dedicated display backlight brightness slider screen
+    APP_STATE_EMISSIVITY,       // Dedicated surface emissivity slider & presets screen
     APP_STATE_SCALING_MENU,     // Dedicated scaling / interpolation mode select screen
     APP_STATE_RESET_CONFIRM,    // Factory reset confirmation dialogue screen
     APP_STATE_THERMAL_RANGE,    // Thermal range mode and span configuration screen
     APP_STATE_SENSOR_ERROR,     // Hardware disconnected / sensor error screen
     APP_STATE_PPT_ARMED,        // PPT Armed, awaiting thermal pulse trigger
     APP_STATE_PPT_ACQUIRING,    // PPT Recording 64 frames
-    APP_STATE_PPT_INSPECT       // PPT Phase depth slicing & frequency sweep
+    APP_STATE_PPT_INSPECT,      // PPT Phase depth slicing & frequency sweep
+    APP_STATE_WIFI_STREAM       // Dedicated low-overhead Wi-Fi streaming state
 };
 
 // Thermal Range Modes (Automatic vs Manual temperature span clamping)
@@ -86,13 +88,15 @@ extern lv_obj_t* screen_ppt;
 extern lv_obj_t* screen_main_menu;
 extern lv_obj_t* screen_settings;
 extern lv_obj_t* screen_brightness;
+extern lv_obj_t* screen_emissivity;
 extern lv_obj_t* screen_scaling;
 extern lv_obj_t* screen_reset;
 extern lv_obj_t* screen_thermal_range;
 extern lv_obj_t* screen_error;
+extern lv_obj_t* screen_wifi_stream;
 
 // Screen item counts
-constexpr int MAIN_MENU_COUNT = 5;
+constexpr int MAIN_MENU_COUNT = 6;
 constexpr int SCALING_OPTIONS_COUNT = 7;
 
 enum SettingItemIndex {
@@ -103,12 +107,14 @@ enum SettingItemIndex {
     SETTING_UPSCALING = 4,
     SETTING_TEMP_UNIT = 5,
     SETTING_THERMAL_RANGE = 6,
-    SETTING_I2C_CLOCK = 7,
-    SETTING_RGB_LED = 8,
-    SETTING_BLUETOOTH = 9,
-    SETTING_FACTORY_RESET = 10,
-    SETTING_BACK = 11,
-    SETTINGS_COUNT = 12
+    SETTING_EMISSIVITY = 7,
+    SETTING_I2C_CLOCK = 8,
+    SETTING_RGB_LED = 9,
+    SETTING_BLUETOOTH = 10,
+    SETTING_WIFI_STREAMING = 11,
+    SETTING_FACTORY_RESET = 12,
+    SETTING_BACK = 13,
+    SETTINGS_COUNT = 14
 };
 
 // Bluetooth Icon Font & Symbol
@@ -154,6 +160,7 @@ void uiTriggerSnapshotFlash();
 void uiNavToMainMenu();
 void uiNavToSettings(int focusIndex = 0);
 void uiNavToBrightness();
+void uiNavToEmissivity();
 void uiNavToScalingMenu();
 void uiNavToResetConfirm();
 void uiNavToThermalRange(AppState caller = APP_STATE_THERMAL_VIEW);
@@ -162,6 +169,7 @@ void uiNavToSensorError(uint32_t attemptCount);
 void uiDismissSensorError();
 void uiNavToPPT();
 bool isPPTArmedCooldown();
+void uiNavToWiFiStream();
 
 // Thermal Range Knob Gesture Progress Bar Overlay
 void showThermalRangeProgressBar(int currentTicks, int maxTicks);
@@ -174,15 +182,19 @@ void buildPPTScreen();
 void buildMainMenuScreen();
 void buildSettingsScreen();
 void buildBrightnessScreen();
+void buildEmissivityScreen();
 void buildScalingScreen();
 void buildResetScreen();
 void setupResetGroup();
 void buildThermalRangeScreen();
 void setupThermalRangeGroup();
 void buildErrorScreen();
-void refreshMainMenuBLEState(bool resetFocus = false);
+void buildWiFiStreamScreen();
+void refreshMainMenuWirelessState(bool resetFocus = false);
 
 // Screen Telemetry & Value Updaters
+void updateWiFiStreamHUD(float spotTemp, float minTemp, float maxTemp, float fps, uint32_t freePsram, const char* clientIp);
+void updateSettingsDescription(int idx);
 void updateBootScreenUI(const char* statusText, uint8_t progressPercent);
 void updateThermalHUD(
     float centerTemp,
@@ -214,6 +226,8 @@ void updatePPTScreenInspect(
 void updateSettingsValues();
 void updateBrightnessValues();
 void setupBrightnessGroup();
+void updateEmissivityValues();
+void setupEmissivityGroup();
 void updateScalingValues();
 void updateScalingDesc(int idx);
 void updateSensorErrorAttempt(uint32_t attemptCount);
@@ -242,9 +256,11 @@ uint32_t getI2CSpeedSetting();
 bool getRgbLedEnabledSetting();
 bool getLiveDenoiseSetting();
 bool getBLEEnabledSetting();
+bool getWiFiStreamingSetting();
 ThermalRangeMode getThermalRangeModeSetting();
 float getManualMinTempSetting();
 float getManualMaxTempSetting();
+float getEmissivitySetting();
 
 void setTempUnitSetting(TempUnit unit);
 void setPaletteSetting(PaletteType pal);
@@ -256,9 +272,12 @@ void setI2CSpeedSetting(uint32_t speedHz);
 void setRgbLedEnabledSetting(bool enabled);
 void setLiveDenoiseSetting(bool enabled);
 void setBLEEnabledSetting(bool enabled);
+void setWiFiStreamingSetting(bool enabled);
 void setThermalRangeModeSetting(ThermalRangeMode mode);
 void setManualMinTempSetting(float minC);
 void setManualMaxTempSetting(float maxC);
+void setEmissivitySetting(float emi);
+const char* getEmissivityPresetName(float emi);
 
 // Shared Temperature Conversion Helpers
 float convertTemp(float tempC, TempUnit unit);

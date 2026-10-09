@@ -17,6 +17,8 @@ static lv_obj_t* lbl_min_hdr = nullptr;
 static lv_obj_t* label_min_temp = nullptr;
 static lv_obj_t* lbl_max_hdr = nullptr;
 static lv_obj_t* label_max_temp = nullptr;
+static lv_obj_t* lbl_emi_hdr = nullptr;
+static lv_obj_t* label_emissivity = nullptr;
 static lv_obj_t* label_hint_left = nullptr;
 static lv_obj_t* label_hint_right = nullptr;
 static lv_obj_t* label_fps = nullptr;
@@ -259,25 +261,37 @@ void buildThermalScreen() {
     lv_label_set_text(lbl_min_hdr, "MIN TEMP");
     lv_obj_set_style_text_color(lbl_min_hdr, UI_COLOR_CYAN, 0);
     lv_obj_set_style_text_font(lbl_min_hdr, &lv_font_montserrat_10, 0);
-    lv_obj_align(lbl_min_hdr, LV_ALIGN_TOP_LEFT, 2, 102);
+    lv_obj_align(lbl_min_hdr, LV_ALIGN_TOP_LEFT, 2, 94);
 
     label_min_temp = lv_label_create(hud_left_panel);
     lv_label_set_text(label_min_temp, "--.- " UI_SYMBOL_DEGREE "C");
     lv_obj_set_style_text_color(label_min_temp, UI_COLOR_TEXT, 0);
     lv_obj_set_style_text_font(label_min_temp, &lv_font_montserrat_12, 0);
-    lv_obj_align(label_min_temp, LV_ALIGN_TOP_LEFT, 2, 118);
+    lv_obj_align(label_min_temp, LV_ALIGN_TOP_LEFT, 2, 108);
 
     lbl_max_hdr = lv_label_create(hud_left_panel);
     lv_label_set_text(lbl_max_hdr, "MAX TEMP");
     lv_obj_set_style_text_color(lbl_max_hdr, UI_COLOR_ORANGE, 0);
     lv_obj_set_style_text_font(lbl_max_hdr, &lv_font_montserrat_10, 0);
-    lv_obj_align(lbl_max_hdr, LV_ALIGN_TOP_LEFT, 2, 142);
+    lv_obj_align(lbl_max_hdr, LV_ALIGN_TOP_LEFT, 2, 130);
 
     label_max_temp = lv_label_create(hud_left_panel);
     lv_label_set_text(label_max_temp, "--.- " UI_SYMBOL_DEGREE "C");
     lv_obj_set_style_text_color(label_max_temp, UI_COLOR_TEXT, 0);
     lv_obj_set_style_text_font(label_max_temp, &lv_font_montserrat_12, 0);
-    lv_obj_align(label_max_temp, LV_ALIGN_TOP_LEFT, 2, 158);
+    lv_obj_align(label_max_temp, LV_ALIGN_TOP_LEFT, 2, 144);
+
+    lbl_emi_hdr = lv_label_create(hud_left_panel);
+    lv_label_set_text(lbl_emi_hdr, "EMIS (e)");
+    lv_obj_set_style_text_color(lbl_emi_hdr, UI_COLOR_TEXT_DIM, 0);
+    lv_obj_set_style_text_font(lbl_emi_hdr, &lv_font_montserrat_8, 0);
+    lv_obj_align(lbl_emi_hdr, LV_ALIGN_TOP_LEFT, 2, 172);
+
+    label_emissivity = lv_label_create(hud_left_panel);
+    lv_label_set_text(label_emissivity, "0.95");
+    lv_obj_set_style_text_color(label_emissivity, UI_COLOR_TEXT, 0);
+    lv_obj_set_style_text_font(label_emissivity, &lv_font_montserrat_10, 0);
+    lv_obj_align(label_emissivity, LV_ALIGN_TOP_LEFT, 2, 184);
 
     label_fps = lv_label_create(hud_left_panel);
     lv_label_set_text(label_fps, "0.0 FPS");
@@ -598,6 +612,11 @@ void updateThermalHUD(
 
             formatTempStr(buf, sizeof(buf), sensorMaxTemp, unit, 1, true);
             lv_label_set_text(label_max_temp, buf);
+
+            if (label_emissivity != nullptr) {
+                snprintf(buf, sizeof(buf), "%.2f", getEmissivitySetting());
+                lv_label_set_text(label_emissivity, buf);
+            }
 
             if (isFrozen) {
                 lv_label_set_text(label_fps, "HOLD");

@@ -10,6 +10,7 @@
 #include "storage.hpp"
 #include "serial.hpp"
 #include "ble.hpp"
+#include "wifi.hpp"
 
 // Global task handles
 TaskHandle_t sensorTaskHandle = NULL;
@@ -40,19 +41,32 @@ void setup() {
     Serial.println("  ESP32-S3 Real-Time Thermal Camera System");
     Serial.println("========================================================");
 
-    // Load user settings from ESP32 NVS (Preferences) before initializing Display & UI
-    loadSettings();
-
-    // Initialize BLE Subsystem (Nordic UART Service, advertising as "thermophase")
-    initBLE("thermophase");
-
-    // 1. Initialize ILI9341 Display FIRST and render Boot Screen
+    // 1. Initialize ILI9341 Display FIRST and render Boot Screen immediately
     // (TFT_LED is kept LOW until the boot screen is drawn in canvas and pushed to LCD memory)
     if (!initDisplay()) {
         Serial.println("[MAIN] Display initialization failed! Check wiring & SPI lines.");
     }
-    showBootScreen("Loading UI & Controls...", 25);
+    showBootScreen("Loading Preferences...", 15);
 
+    // Initialize Wi-Fi subsystem groundwork
+    initWiFiStreaming();
+
+    // Load user settings from ESP32 NVS (Preferences) before initializing subsystems
+    loadSettings();
+
+    showBootScreen("Loading Wireless...", 25);
+    // Start strictly ONE wireless service based on loaded settings (mutual exclusivity)
+    if (getWiFiStreamingSetting()) {
+        Serial.println("[MAIN] Wi-Fi Streaming is active: Hosting 'thermophase AP'");
+        setWiFiStreamingEnabled(true);
+    } else if (getBLEEnabledSetting()) {
+        Serial.println("[MAIN] Bluetooth is active: Advertising as 'thermophase'");
+        initBLE("thermophase");
+    } else {
+        Serial.println("[MAIN] Wireless radio is disabled (Maximum power saving)");
+    }
+
+    showBootScreen("Loading Controls...", 35);
     // 2. Initialize On-board RGB LED
     initRGB();
     // 3. Spawn RGB LED task immediately so LED feedback is live during boot
@@ -194,16 +208,22 @@ void loop() {
                 case SCALING_LANCZOS:  modeName = "Lanczos"; break;
                 case SCALING_TAAU:     modeName = "TAAU"; break;
             }
-
             BatteryTelemetry bt;
             getBatteryTelemetry(bt);
             const char* stateStr = (bt.state == BATTERY_CHARGING) ? "CHARGING" :
                                    (bt.state == BATTERY_DISCHARGING) ? "DISCHARGING" : "DISCONNECTED";
 
+            const char* wirelessStatus = "OFF";
+            if (getWiFiStreamingSetting()) {
+                wirelessStatus = isWiFiClientConnected() ? "WIFI (LINKED)" : "WIFI (HOSTING)";
+            } else if (getBLEEnabledSetting()) {
+                wirelessStatus = isBLEConnected() ? "BLE (CONNECTED)" : "BLE (ADVERTISING)";
+            }
+
             // All systems healthy: comprehensive periodic telemetry (USB + BLE)
-            outPrintf("[SYS] Feed: %4.1f FPS | Spot: %4.1f C [%4.1f - %4.1f C] | Uptime: %lu s | BLE: %s\n",
+            outPrintf("[SYS] Feed: %4.1f FPS | Spot: %4.1f C [%4.1f - %4.1f C] | Uptime: %lu s | Wireless: %s\n",
                       displayFps, displayCenterTemp, displayMinTemp, displayMaxTemp, now / 1000,
-                      isBLEConnected() ? "CONNECTED" : "ADVERTISING");
+                      wirelessStatus);
             outPrintf("[BATT] V_inst: %.3fV | V_avg: %.3fV | Step: %+.3fV | Drift: %+.3fV | State: %s (%u%%) | Deb: C=%u/4, D=%u/3 | Cand: %s (%s)\n",
                       bt.instantV, bt.avgV, bt.step, bt.drift, stateStr, bt.percentage,
                       bt.chargeDebounce, bt.dischargeDebounce, bt.candidate, bt.reason);
@@ -214,9 +234,19 @@ void loop() {
             outPrintf("[COMP] Core 1: %4.1f%% (Scale: %4.1f ms, Flush: %4.1f ms, Headroom: %4.1f ms / %4.1f%%)\n",
                       globalComputeStats.core1LoadPct, globalComputeStats.scaleTimeMs, globalComputeStats.flushTimeMs,
                       globalComputeStats.core1HeadroomMs, globalComputeStats.core1HeadroomPct);
-            outPrintf("[COMP] Core 0: %4.1f%% (I2C: %4.1f ms) | Free DRAM: %u KB | Free PSRAM: %u KB\n\n",
+            lv_mem_monitor_t lv_mon;
+            lv_mem_monitor(&lv_mon);
+            outPrintf("[COMP] Core 0: %4.1f%% (I2C: %4.1f ms) | Free DRAM: %u KB | Free PSRAM: %u KB | LVGL: %u/%u KB (%u%% used, frag: %u%%)\n",
                       globalComputeStats.core0LoadPct, globalComputeStats.sensorReadMs,
-                      ESP.getFreeHeap() / 1024, ESP.getFreePsram() / 1024);
+                      ESP.getFreeHeap() / 1024, ESP.getFreePsram() / 1024,
+                      (unsigned int)((lv_mon.total_size - lv_mon.free_size) / 1024),
+                      (unsigned int)(lv_mon.total_size / 1024),
+                      (unsigned int)lv_mon.used_pct,
+                      (unsigned int)lv_mon.frag_pct);
+            unsigned int dispStackWords = displayTaskHandle ? (unsigned int)uxTaskGetStackHighWaterMark(displayTaskHandle) : 0;
+            unsigned int sensorStackWords = sensorTaskHandle ? (unsigned int)uxTaskGetStackHighWaterMark(sensorTaskHandle) : 0;
+            outPrintf("[STACK] High Water Mark: Display Task: %u words | Sensor Task: %u words\n\n",
+                      dispStackWords, sensorStackWords);
         }
     }
 

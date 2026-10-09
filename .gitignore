@@ -4,5 +4,4 @@ __pycache__/
 *.pyc
 *.log
 
-fix_scons.py
 test-scripts/

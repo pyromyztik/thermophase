@@ -122,6 +122,26 @@
 
 
 // ==========================================================
+// WI-FI TRANSMIT POWER & RF NOISE CONFIGURATION
+// ==========================================================
+// By default, the ESP32-S3 transmits at its maximum power (+19.5 dBm, raw 78),
+// pulling ~350-400 mA current surges during packet bursts. These large current steps
+// induce audible coil whine / singing capacitor vibrations in MLCC ceramic capacitors
+// and power inductors.
+// Lowering the TX power to +11.0 dBm (raw 44) cuts peak current surges by ~150-180 mA,
+// quieting or completely silencing the acoustic noise while still easily maintaining
+// a rock-solid 5-10 meter range.
+// Units are in 0.25 dBm increments:
+//   78 = +19.5 dBm (Default max power, loudest coil whine)
+//   60 = +15.0 dBm
+//   52 = +13.0 dBm
+//   44 = +11.0 dBm (Recommended: ~150 mA surge cut, quiet, 5-10m range)
+//   34 = +8.5 dBm  (Ultra quiet: ~180 mA surge cut, 3-6m range)
+#define WIFI_TX_POWER_RAW   44
+
+
+
+// ==========================================================
 // FREERTOS TASK CONFIGURATION
 // ==========================================================
 #define SENSOR_TASK_CORE     0
@@ -130,7 +150,7 @@
 
 #define DISPLAY_TASK_CORE    1
 #define DISPLAY_TASK_PRIO    2
-#define DISPLAY_TASK_STACK   8192
+#define DISPLAY_TASK_STACK   12288
 
 #define LED_TASK_CORE        0
 #define LED_TASK_PRIO        1

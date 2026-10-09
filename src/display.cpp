@@ -3,15 +3,18 @@
 #include "power.hpp"
 #include "diagnostics.hpp"
 #include "ppt.hpp"
+#include "wifi.hpp"
 #include <esp_timer.h>
 #include <esp_heap_caps.h>
 #include <cmath>
+#include <new>
 
 // Hardware SPI TFT instance
 Adafruit_ILI9341 tft = Adafruit_ILI9341(&SPI, TFT_DC, TFT_CS, TFT_RST);
 
 // Multi-mode thermal scaling engine (Nearest, Bilinear, Bicubic, Lanczos, TAAU)
-static ThermalScaler scaler;
+// Allocated in PSRAM during initDisplay() to free 68 KB of critical internal DRAM
+static ThermalScaler* scaler = nullptr;
 
 // Viewport and rotated sensor dimensions
 static int vpX = 0;
@@ -46,8 +49,8 @@ volatile float displayCenterTemp = 0.0f;
 volatile float displayMinTemp = 0.0f;
 volatile float displayMaxTemp = 0.0f;
 
-// LVGL Draw Buffer (allocated in internal DMA-capable SRAM: 40 lines fits with abundant DRAM headroom)
-#define LVGL_DRAW_BUF_LINES 40
+// LVGL Draw Buffer (allocated in internal DMA-capable SRAM: 20 lines provides abundant DRAM headroom)
+#define LVGL_DRAW_BUF_LINES 20
 static lv_color_t disp_buf[DISPLAY_WIDTH * LVGL_DRAW_BUF_LINES];
 static lv_disp_draw_buf_t draw_buf;
 static lv_disp_drv_t disp_drv;
@@ -97,7 +100,9 @@ static void recomputeBilinearTables(int rotation) {
         vpY = 0;
     }
 
-    scaler.reconfigureViewport(vpW, vpH, gridW, gridH);
+    if (scaler) {
+        scaler->reconfigureViewport(vpW, vpH, gridW, gridH);
+    }
     Serial.printf("[TFT] Recomputed Viewport: %dx%d at (%d,%d), Grid: %dx%d, Rotation: %d\n",
                   vpW, vpH, vpX, vpY, gridW, gridH, currentCameraRotation);
 }
@@ -191,17 +196,17 @@ void updatePalette(PaletteType palette) {
 }
 void updateMirror(bool mirror) {
     currentMirrorFeed = mirror;
-    scaler.reset();
+    if (scaler) scaler->reset();
 }
 void updateScalingMode(ScalingMode mode) {
     currentScalingMode = mode;
-    scaler.reset();
+    if (scaler) scaler->reset();
 }
 ScalingMode getScalingMode() {
     return currentScalingMode;
 }
 void resetScalerHistory() {
-    scaler.reset();
+    if (scaler) scaler->reset();
 }
 
 static uint8_t currentDisplayBrightness = TFT_DEFAULT_BRIGHTNESS;
@@ -228,7 +233,7 @@ void setDisplayRotation(uint8_t rotation) {
     if (!displayInitialized) {
         return;
     }
-    scaler.reset();
+    if (scaler) scaler->reset();
     uint8_t hwRot = (currentDisplayRotation == 1) ? 3 : 1;
     tft.setRotation(hwRot);
     tft.fillScreen(ILI9341_BLACK);
@@ -281,6 +286,9 @@ static uint32_t s_lastRangeRotTime = 0;
 static int s_rangeRotTicks = 0;
 static WheelEventType s_lastRotDir = WHEEL_EVENT_NONE;
 
+// Deferred UI navigation target requested from input callbacks
+static volatile AppState s_pendingNavState = (AppState)-1;
+
 // LVGL Rotary Wheel Input Callback
 static void wheel_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
     static int32_t last_diff = 0;
@@ -307,11 +315,8 @@ static void wheel_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
             } else if (evt == WHEEL_EVENT_LONG_PRESS) {
                 pendingWheelSingleClick = false;
                 lastWheelClickTime = 0;
-                if (uiIsFullscreen()) {
-                    uiExitFullscreen();
-                }
-                // Long press opens Main Menu
-                uiNavToMainMenu();
+                // Defer Main Menu transition safely out of indev callback
+                s_pendingNavState = APP_STATE_MAIN_MENU;
                 break;
             } else if (evt == WHEEL_EVENT_ROT_CW || evt == WHEEL_EVENT_ROT_CCW) {
                 uint32_t now = millis();
@@ -342,10 +347,7 @@ static void wheel_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
                     s_rangeRotTicks = 0;
                     s_lastRotDir = WHEEL_EVENT_NONE;
                     hideThermalRangeProgressBar(false);
-                    if (uiIsFullscreen()) {
-                        uiExitFullscreen();
-                    }
-                    uiNavToThermalRange(APP_STATE_THERMAL_VIEW);
+                    s_pendingNavState = APP_STATE_THERMAL_RANGE;
                     break;
                 }
             }
@@ -361,10 +363,7 @@ static void wheel_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
             } else if (evt == WHEEL_EVENT_LONG_PRESS) {
                 pendingWheelSingleClick = false;
                 lastWheelClickTime = 0;
-                if (uiIsFullscreen()) {
-                    uiExitFullscreen();
-                }
-                uiNavToMainMenu();
+                s_pendingNavState = APP_STATE_MAIN_MENU;
                 break;
             }
         } else if (state == APP_STATE_PPT_ARMED || state == APP_STATE_PPT_ACQUIRING || state == APP_STATE_PPT_INSPECT) {
@@ -372,7 +371,7 @@ static void wheel_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
             lastWheelClickTime = 0;
             if (evt == WHEEL_EVENT_LONG_PRESS) {
                 // Long press (>= 600ms) exits immediately to Main Menu from all PPT states
-                uiNavToMainMenu();
+                s_pendingNavState = APP_STATE_MAIN_MENU;
                 break;
             } else if (state == APP_STATE_PPT_ARMED) {
                 if (evt == WHEEL_EVENT_CLICK) {
@@ -398,7 +397,7 @@ static void wheel_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
                     }
                 } else if (evt == WHEEL_EVENT_CLICK) {
                     // Single click in inspect mode returns to look-around preview state
-                    uiNavToPPT();
+                    s_pendingNavState = APP_STATE_PPT_ARMED;
                     break;
                 }
             }
@@ -419,6 +418,7 @@ static void wheel_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
     data->enc_diff = last_diff;
     last_diff = 0;
 
+    data->key = LV_KEY_ENTER;
     if (button_pressed) {
         data->state = LV_INDEV_STATE_PRESSED;
         button_pressed = false; // Next poll will read RELEASED
@@ -519,9 +519,15 @@ bool initDisplay() {
     lv_indev_t* wheel_indev = lv_indev_drv_register(&indev_drv);
     lv_indev_set_group(wheel_indev, ui_wheel_group);
 
-    // Initialize Multi-mode Scaler
-    if (!scaler.init(DISPLAY_WIDTH, DISPLAY_HEIGHT)) {
-        Serial.println("[TFT] Warning: Scaler PSRAM allocation partial.");
+    // Initialize Multi-mode Scaler in PSRAM (saving ~68 KB of internal DRAM)
+    scaler = (ThermalScaler*)heap_caps_malloc(sizeof(ThermalScaler), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (scaler) {
+        new (scaler) ThermalScaler();
+        if (!scaler->init(DISPLAY_WIDTH, DISPLAY_HEIGHT)) {
+            Serial.println("[TFT] Warning: Scaler PSRAM allocation partial.");
+        }
+    } else {
+        Serial.println("[TFT] ERROR: Failed to allocate ThermalScaler in PSRAM!");
     }
 
     // Initialize Pulsed Phase Thermography (PPT) spatiotemporal cube
@@ -542,7 +548,7 @@ void displayTask(void *pvParameters) {
     Serial.println("[TASK] LVGL Display & Thermal Pipeline Task started on Core " 
         + String(xPortGetCoreID()));
 
-    ThermalFrame currentFrame;
+    static ThermalFrame currentFrame;
     static ThermalFrame lastValidFrame = {};
     for (size_t i = 0; i < SENSOR_PIXELS; ++i) {
         lastValidFrame.temperatures[i] = 25.0f;
@@ -563,6 +569,25 @@ void displayTask(void *pvParameters) {
 
     while (true) {
         uint32_t now = millis();
+
+        // Handle deferred UI navigation safely outside of LVGL timer & indev callback context
+        if (s_pendingNavState != (AppState)-1) {
+            AppState target = s_pendingNavState;
+            s_pendingNavState = (AppState)-1;
+            if (target == APP_STATE_MAIN_MENU) {
+                if (uiIsFullscreen()) {
+                    uiExitFullscreen();
+                }
+                uiNavToMainMenu();
+            } else if (target == APP_STATE_THERMAL_RANGE) {
+                if (uiIsFullscreen()) {
+                    uiExitFullscreen();
+                }
+                uiNavToThermalRange(APP_STATE_THERMAL_VIEW);
+            } else if (target == APP_STATE_PPT_ARMED) {
+                uiNavToPPT();
+            }
+        }
 
         // 1. Connection Monitoring (every 1000 ms)
         #if CHECK_TFT_MISO
@@ -641,7 +666,7 @@ void displayTask(void *pvParameters) {
 
         static int lastVpW = 0, lastVpH = 0, lastGridW = 0, lastGridH = 0;
         if (activeVpW != lastVpW || activeVpH != lastVpH || activeGridW != lastGridW || activeGridH != lastGridH) {
-            scaler.reconfigureViewport(activeVpW, activeVpH, activeGridW, activeGridH);
+            if (scaler) scaler->reconfigureViewport(activeVpW, activeVpH, activeGridW, activeGridH);
             lastVpW = activeVpW;
             lastVpH = activeVpH;
             lastGridW = activeGridW;
@@ -710,21 +735,23 @@ void displayTask(void *pvParameters) {
 
                     // Execute thermal scaling directly into the thermalFrameBuffer
                     int64_t tScaleStart = esp_timer_get_time();
-                    scaler.render(
-                        currentScalingMode,
-                        rotatedGrid,
-                        activeGridW,
-                        activeGridH,
-                        thermalFrameBuffer,
-                        0,
-                        0,
-                        activeVpW,
-                        activeVpH,
-                        activeVpW,
-                        effectiveMin,
-                        invRange,
-                        activePalette
-                    );
+                    if (scaler) {
+                        scaler->render(
+                            currentScalingMode,
+                            rotatedGrid,
+                            activeGridW,
+                            activeGridH,
+                            thermalFrameBuffer,
+                            0,
+                            0,
+                            activeVpW,
+                            activeVpH,
+                            activeVpW,
+                            effectiveMin,
+                            invRange,
+                            activePalette
+                        );
+                    }
                     int64_t tScaleEnd = esp_timer_get_time();
                     int64_t scaleUs = tScaleEnd - tScaleStart;
 
@@ -811,21 +838,23 @@ void displayTask(void *pvParameters) {
                 computeEffectiveThermalRange(lastValidFrame.minTemp, lastValidFrame.maxTemp, effectiveMin, range);
                 float invRange = 255.0f / range;
 
-                scaler.render(
-                    currentScalingMode,
-                    rotatedGrid,
-                    activeGridW,
-                    activeGridH,
-                    thermalFrameBuffer,
-                    0,
-                    0,
-                    activeVpW,
-                    activeVpH,
-                    activeVpW,
-                    effectiveMin,
-                    invRange,
-                    activePalette
-                );
+                if (scaler) {
+                    scaler->render(
+                        currentScalingMode,
+                        rotatedGrid,
+                        activeGridW,
+                        activeGridH,
+                        thermalFrameBuffer,
+                        0,
+                        0,
+                        activeVpW,
+                        activeVpH,
+                        activeVpW,
+                        effectiveMin,
+                        invRange,
+                        activePalette
+                    );
+                }
 
                 updateThermalHUD(
                     lastValidFrame.centerTemp,
@@ -885,21 +914,23 @@ void displayTask(void *pvParameters) {
                 // For PPT phase maps (static 2D slice, values 0.0-255.0), bypass temporal history (TAAU) 
                 // to prevent temporal clamping saturation (whiteout) and history buffer contamination.
                 ScalingMode pptRenderMode = (currentScalingMode == SCALING_TAAU) ? SCALING_BICUBIC : currentScalingMode;
-                scaler.render(
-                    pptRenderMode,
-                    rotatedGrid,
-                    24,
-                    32,
-                    thermalFrameBuffer,
-                    0,
-                    0,
-                    144,
-                    192,
-                    144,
-                    0.0f,
-                    1.0f,
-                    activePalette
-                );
+                if (scaler) {
+                    scaler->render(
+                        pptRenderMode,
+                        rotatedGrid,
+                        24,
+                        32,
+                        thermalFrameBuffer,
+                        0,
+                        0,
+                        144,
+                        192,
+                        144,
+                        0.0f,
+                        1.0f,
+                        activePalette
+                    );
+                }
 
                 float pMin, pMax, pCenter;
                 pptGetPhaseStats(pMin, pMax, pCenter);
@@ -922,6 +953,44 @@ void displayTask(void *pvParameters) {
                 lv_timer_handler();
                 frameProcessed = true;
             }
+        } else if (curState == APP_STATE_WIFI_STREAM && lv_scr_act() == screen_wifi_stream) {
+            // Dedicated Low-Overhead Wi-Fi Streaming Mode:
+            // Suspend heavy 320x240 TAAU/bicubic upscaling and 153KB SPI DMA flushes.
+            // Check sensor frame notifications to maintain live telemetry readouts at low refresh rate.
+            uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50));
+            if (notified > 0) {
+                if (getLatestThermalFrame(currentFrame)) {
+                    lastValidFrame = currentFrame;
+                    displayCenterTemp = currentFrame.centerTemp;
+                    displayMinTemp = currentFrame.minTemp;
+                    displayMaxTemp = currentFrame.maxTemp;
+                    frameCount++;
+                }
+            }
+
+            now = millis();
+            if (now - lastFpsCalc >= 1000) {
+                currentFps = (frameCount * 1000.0f) / (now - lastFpsCalc);
+                frameCount = 0;
+                lastFpsCalc = now;
+                displayFps = currentFps;
+            }
+
+            static uint32_t s_lastHudUpdate = 0;
+            if (now - s_lastHudUpdate >= 200) { // 5 Hz telemetry refresh
+                s_lastHudUpdate = now;
+                updateWiFiStreamHUD(
+                    lastValidFrame.centerTemp,
+                    lastValidFrame.minTemp,
+                    lastValidFrame.maxTemp,
+                    displayFps,
+                    ESP.getFreePsram(),
+                    getWiFiLatestClientIP()
+                );
+            }
+
+            lv_timer_handler();
+            frameProcessed = true;
         }
 
         // 4. Handle LVGL timer and animation ticks when not flushed with thermal frame
@@ -929,9 +998,13 @@ void displayTask(void *pvParameters) {
             lv_timer_handler();
         }
 
-        // Yield to allow FreeRTOS scheduling without sleeping through the next frame
+        // Yield to allow FreeRTOS scheduling and ensure Core 1 IDLE task feeds watchdog
         if (isLiveThermalState) {
-            taskYIELD();
+            if (!frameProcessed) {
+                vTaskDelay(pdMS_TO_TICKS(5));
+            } else {
+                vTaskDelay(pdMS_TO_TICKS(1));
+            }
         } else {
             vTaskDelay(pdMS_TO_TICKS(10));
         }
