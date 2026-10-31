@@ -54,6 +54,8 @@ extern Adafruit_MLX90640 mlx;
 // Sensor initialization and background task
 bool initThermalSensor();
 void thermalSensorTask(void *pvParameters);
+void powerOffSensor();
+void powerOnSensor();
 
 // I2C Clock speed configuration
 void setSensorI2CSpeed(uint32_t speedHz);

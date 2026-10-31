@@ -13,11 +13,6 @@
     <div class="title-area">
       <h1><span class="accent">&#x25A0;</span> THERMOPHASE <span class="sub-title">[ WI-FI STREAM ]</span></h1>
     </div>
-    <div class="header-badges">
-      <span class="badge badge-ip" id="ipBadge">[ 192.168.4.1 ]</span>
-      <span class="badge badge-ws" id="wsBadge">[ WS CONNECTING... ]</span>
-      <span class="badge badge-live" id="connBadge">[ AP HOSTING ]</span>
-    </div>
   </header>
 
   <div class="grid">
@@ -26,11 +21,14 @@
       <div class="card-title" style="width:100%;">
         <span><span class="accent">&#x25A0;</span> LIVE THERMAL CAMERA FEED</span>
         <div style="display:flex; gap:6px; align-items:center;">
-          <span class="badge badge-live" id="feedBadge">[ LIVE STREAM ]</span>
+          <span class="badge badge-dim" id="feedBadge">[ READY ]</span>
         </div>
       </div>
 
       <div class="stream-stage">
+        <!-- Balancing spacer on left so viewportWrapper is mathematically dead-center on mobile & desktop -->
+        <div class="colorbar-spacer" aria-hidden="true"></div>
+
         <div class="viewport-wrapper" id="viewportWrapper">
           <canvas id="thermalCanvas" class="thermal-canvas" width="480" height="640"></canvas>
           <div class="reticle" id="reticle"></div>
@@ -41,7 +39,6 @@
           <div class="hud-badge hud-rec" id="hudRec" style="display:none;"><span class="rec-dot"></span> REC <span id="recTime">00:00</span></div>
           <div class="hud-badge hud-fps" id="hudFps">0.0 FPS</div>
           <div class="hud-badge hud-min" id="hudMin">MIN: --.- &deg;C</div>
-          <div class="hud-badge hud-mode" id="hudMode">AUTO RANGE</div>
           <div class="hud-badge hud-max" id="hudMax">MAX: --.- &deg;C</div>
 
           <!-- Video Connection Trouble Overlay Banner -->
@@ -50,6 +47,26 @@
             <div class="alert-content">
               <div class="alert-title" id="alertTitle">CONNECTION TROUBLE</div>
               <div class="alert-sub" id="alertSub">Attempting to reconnect...</div>
+            </div>
+          </div>
+
+          <!-- Stream Inactive / Start Stream Viewport Overlay -->
+          <div class="stream-inactive-overlay" id="streamInactiveAlert" style="display:none;">
+            <div class="alert-icon">&#x25B6;</div>
+            <div class="alert-content">
+              <div class="alert-title">STREAM INACTIVE</div>
+              <div class="alert-sub">Click below to start live thermal video streaming over Wi-Fi.</div>
+              <button type="button" id="btnOverlayStartStream" class="ctrl-btn ctrl-btn-stream-prominent">&#x25B6; START WI-FI STREAM</button>
+            </div>
+          </div>
+
+          <!-- Standby Mode Full Viewport Overlay Cover -->
+          <div class="standby-overlay" id="standbyAlert" style="display:none;">
+            <div class="alert-icon">&#x1F319;</div>
+            <div class="alert-content">
+              <div class="alert-title">CAMERA IN STANDBY</div>
+              <div class="alert-sub">Display, thermal sensor, and RGB LED are asleep (~35 mA). Wi-Fi active.</div>
+              <button type="button" id="btnOverlayWake" class="ctrl-btn ctrl-btn-wake">&#x2600; WAKE UP CAMERA</button>
             </div>
           </div>
         </div>
@@ -64,10 +81,13 @@
         </div>
       </div>
 
-      <!-- Clean Action Bar: Only Record, Capture Pic, and Settings Menu -->
+      <!-- Clean Action Bar: Record, Capture, Stream, Standby, Power Off, Settings -->
       <div class="controls-bar">
-        <button type="button" id="btnRecord" class="ctrl-btn ctrl-btn-record"><span class="rec-icon">&#x25A0;</span> Record Video</button>
-        <button type="button" id="btnCapture" class="ctrl-btn ctrl-btn-capture">&#x1F4F7; Capture Photo</button>
+        <button type="button" id="btnRecord" class="ctrl-btn ctrl-btn-record" disabled title="Start live stream first to record video"><span class="rec-icon">&#x25A0;</span> Record Video</button>
+        <button type="button" id="btnCapture" class="ctrl-btn ctrl-btn-capture" disabled title="Start live stream first to capture photo">&#x1F4F7; Capture Photo</button>
+        <button type="button" id="btnStreamToggle" class="ctrl-btn ctrl-btn-stream" title="Start or stop live Wi-Fi stream"><span class="stream-icon">&#x25B6;</span> Start Stream</button>
+        <button type="button" id="btnStandby" class="ctrl-btn ctrl-btn-standby" title="Put display and sensor to sleep while keeping Wi-Fi active">&#x1F319; Standby</button>
+        <button type="button" id="btnPowerOff" class="ctrl-btn ctrl-btn-power" title="Shut down camera into deep sleep (~10 uA)"><svg class="btn-icon-svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 2v10M18.36 6.64A9 9 0 1 1 5.64 6.64"/></svg> Power Off</button>
         <button type="button" id="btnSettingsToggle" class="ctrl-btn ctrl-btn-settings">&#x2699; Settings &#x25BE;</button>
       </div>
 
@@ -239,6 +259,31 @@
         <input type="text" id="termInput" class="term-input" placeholder="Type command..." autocomplete="off" autocapitalize="none" spellcheck="false">
         <button type="submit" class="term-send-btn" id="termSendBtn">Send</button>
       </form>
+    </div>
+  </div>
+
+  <!-- Power Off Confirmation Modal Dialog -->
+  <div class="modal-backdrop" id="powerModal" style="display:none;">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <span><span class="accent">&#x25A0;</span> SHUT DOWN CAMERA</span>
+        <button type="button" class="drawer-close-btn" id="btnPowerModalClose" title="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="margin: 0 0 10px 0; color: #ffffff; font-size: 13px; font-weight: 600;">
+          Put camera into true hardware Deep Sleep mode (~10 &micro;A)?
+        </p>
+        <p style="margin: 0 0 12px 0; color: var(--dim); font-size: 12px; line-height: 1.4;">
+          The Wi-Fi Access Point will turn off and you will be disconnected from the web interface.
+        </p>
+        <div class="modal-wake-note">
+          <span style="color: var(--green); font-weight: bold;">&#x2714; To turn back on:</span> Click the physical rotary knob (HW-040) on the camera.
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="ctrl-btn" id="btnCancelPower">Cancel</button>
+        <button type="button" class="ctrl-btn ctrl-btn-danger" id="btnConfirmPower"><svg class="btn-icon-svg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 2v10M18.36 6.64A9 9 0 1 1 5.64 6.64"/></svg> Shut Down</button>
+      </div>
     </div>
   </div>
 

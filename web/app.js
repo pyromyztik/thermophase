@@ -40,8 +40,17 @@ let isReconnecting = false;
 let reconnectCount = 0;
 let connectionTrouble = null; // null | { title: string, sub: string, level: 'warn'|'err' }
 
+// --- Stream State & Elements ---
+let isStreaming = false;
+const btnRecord = document.getElementById('btnRecord');
+const btnCapture = document.getElementById('btnCapture');
+const btnStreamToggle = document.getElementById('btnStreamToggle');
+const btnOverlayStartStream = document.getElementById('btnOverlayStartStream');
+const streamInactiveAlert = document.getElementById('streamInactiveAlert');
+const feedBadge = document.getElementById('feedBadge');
+
 // --- Viewport & Canvas Rendering Helpers ---
-function drawPlaceholder(msg = 'Waiting for live thermal frames...') {
+function drawPlaceholder(msg = 'Live Wi-Fi Streaming is Inactive') {
   ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = '#ff1e27';
@@ -53,7 +62,7 @@ function drawPlaceholder(msg = 'Waiting for live thermal frames...') {
   ctx.fillText(msg, canvas.width / 2, canvas.height / 2 + 15);
   ctx.fillStyle = '#00e676';
   ctx.font = '11px monospace, sans-serif';
-  ctx.fillText('[Click "Stream over Wi-Fi" on device menu to start]', canvas.width / 2, canvas.height / 2 + 45);
+  ctx.fillText('[Click "Start Stream" to begin streaming]', canvas.width / 2, canvas.height / 2 + 45);
 }
 
 function updateDimensions() {
@@ -343,8 +352,11 @@ setInterval(() => {
 let ws = null;
 function connectWebSocket() {
   const wsUrl = 'ws://' + (window.location.hostname || '192.168.4.1') + ':81/';
-  document.getElementById('wsBadge').textContent = 'WS CONNECTING...';
-  document.getElementById('wsBadge').className = 'badge badge-ws';
+  const wsBadge = document.getElementById('wsBadge');
+  if (wsBadge) {
+    wsBadge.textContent = 'WS CONNECTING...';
+    wsBadge.className = 'badge badge-ws';
+  }
 
   ws = new WebSocket(wsUrl);
   ws.binaryType = 'arraybuffer';
@@ -353,11 +365,20 @@ function connectWebSocket() {
     isConnected = true;
     isReconnecting = false;
     reconnectCount = 0;
-    document.getElementById('wsBadge').textContent = 'WS STREAM ACTIVE';
-    document.getElementById('wsBadge').className = 'badge badge-live';
+    if (wsBadge) {
+      wsBadge.textContent = 'WS STREAM ACTIVE';
+      wsBadge.className = 'badge badge-live';
+    }
+    if (feedBadge && !isStreaming) {
+      feedBadge.textContent = '[ READY ]';
+      feedBadge.className = 'badge badge-dim';
+    }
     appendTerminalOutput('[SYSTEM] WebSocket link established to camera');
-    if (frameCount === 0) {
-      drawPlaceholder('Connected to Camera! Waiting for frames...');
+    if (!isStreaming && frameCount === 0) {
+      drawPlaceholder('Live Wi-Fi Streaming is Inactive');
+      if (streamInactiveAlert && !isStandby) {
+        streamInactiveAlert.style.display = 'flex';
+      }
     }
   };
 
@@ -365,8 +386,14 @@ function connectWebSocket() {
     isConnected = false;
     isReconnecting = true;
     reconnectCount++;
-    document.getElementById('wsBadge').textContent = 'WS RECONNECTING...';
-    document.getElementById('wsBadge').className = 'badge badge-ws';
+    if (wsBadge) {
+      wsBadge.textContent = 'WS RECONNECTING...';
+      wsBadge.className = 'badge badge-ws';
+    }
+    if (feedBadge) {
+      feedBadge.textContent = '[ RECONNECTING... ]';
+      feedBadge.className = 'badge badge-warn';
+    }
     appendTerminalOutput(`[SYSTEM] Connection lost. Reconnecting in 1.5s (Retry #${reconnectCount})...`, 'err');
     if (frameCount === 0) {
       drawPlaceholder('WebSocket Disconnected - Reconnecting...');
@@ -375,13 +402,16 @@ function connectWebSocket() {
   };
 
   ws.onerror = () => {
-    document.getElementById('wsBadge').textContent = 'WS ERROR';
+    if (wsBadge) wsBadge.textContent = 'WS ERROR';
   };
 
   ws.onmessage = (event) => {
     if (event.data instanceof ArrayBuffer) {
       const chunk = new Uint8Array(event.data);
       if (chunk.length >= 1546 && chunk[0] === 0x5A && chunk[1] === 0xA5 && chunk[2] === 0x5A && chunk[3] === 0xA7) {
+        if (!isStreaming) {
+          updateStreamingUI(true);
+        }
         const dv = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength);
         const rangeMode = chunk[4];
         const palId = chunk[5];
@@ -618,6 +648,7 @@ function stopRecording() {
 }
 
 document.getElementById('btnRecord').addEventListener('click', () => {
+  if (!isStreaming) return;
   if (mediaRecorder && mediaRecorder.state === 'recording') {
     stopRecording();
   } else {
@@ -738,6 +769,7 @@ document.getElementById('btnFlip').addEventListener('click', function() {
 });
 
 document.getElementById('btnCapture').addEventListener('click', () => {
+  if (!isStreaming) return;
   // Create off-screen canvas with dedicated side panel for color range scale
   const photoCanvas = document.createElement('canvas');
   photoCanvas.width = canvas.width + COLORBAR_PANEL_WIDTH;
@@ -1091,6 +1123,190 @@ async function loadInitialLogs() {
   } catch (e) {}
 }
 
+// --- Standby & Power Management ---
+let isStandby = false;
+
+function updateStandbyUI(standbyActive) {
+  isStandby = !!standbyActive;
+  const standbyAlert = document.getElementById('standbyAlert');
+  const btnStandby = document.getElementById('btnStandby');
+  const statPwr = document.getElementById('statPwr');
+
+  if (isStandby) {
+    if (standbyAlert) standbyAlert.style.display = 'flex';
+    if (streamInactiveAlert) streamInactiveAlert.style.display = 'none';
+    if (btnStandby) {
+      btnStandby.innerHTML = '&#x2600; Wake Up';
+      btnStandby.classList.add('active');
+    }
+    if (statPwr) {
+      statPwr.innerText = 'STANDBY';
+    }
+  } else {
+    if (standbyAlert) standbyAlert.style.display = 'none';
+    if (streamInactiveAlert && !isStreaming) streamInactiveAlert.style.display = 'flex';
+    if (btnStandby) {
+      btnStandby.innerHTML = '&#x1F319; Standby';
+      btnStandby.classList.remove('active');
+    }
+  }
+}
+
+// --- Wi-Fi Stream Control Functions ---
+function updateStreamingUI(active) {
+  isStreaming = !!active;
+
+  if (btnStreamToggle) {
+    if (isStreaming) {
+      btnStreamToggle.innerHTML = '<span class="stream-icon">&#x25A0;</span> Stop Stream';
+      btnStreamToggle.classList.add('streaming');
+      btnStreamToggle.title = 'Stop live Wi-Fi stream';
+    } else {
+      btnStreamToggle.innerHTML = '<span class="stream-icon">&#x25B6;</span> Start Stream';
+      btnStreamToggle.classList.remove('streaming');
+      btnStreamToggle.title = 'Start live Wi-Fi stream';
+    }
+  }
+
+  if (streamInactiveAlert) {
+    streamInactiveAlert.style.display = (!isStreaming && !isStandby) ? 'flex' : 'none';
+  }
+
+  if (btnRecord) {
+    btnRecord.disabled = !isStreaming;
+    btnRecord.title = isStreaming ? 'Record video of live thermal stream' : 'Start live stream first to record video';
+  }
+
+  if (btnCapture) {
+    btnCapture.disabled = !isStreaming;
+    btnCapture.title = isStreaming ? 'Capture photo of current thermal frame' : 'Start live stream first to capture photo';
+  }
+
+  if (feedBadge) {
+    if (isStreaming) {
+      feedBadge.textContent = '[ LIVE STREAM ]';
+      feedBadge.className = 'badge badge-live';
+    } else {
+      feedBadge.textContent = '[ STREAM PAUSED ]';
+      feedBadge.className = 'badge badge-dim';
+    }
+  }
+}
+
+async function toggleWiFiStream(forceState) {
+  const next = (forceState !== undefined) ? !!forceState : !isStreaming;
+  updateStreamingUI(next);
+
+  // If starting stream while in standby, wake up camera
+  if (next && isStandby) {
+    sendPowerAction('wake');
+  }
+
+  try {
+    const res = await fetch(`/api/stream?action=${next ? 'start' : 'stop'}`);
+    if (res.ok) {
+      const d = await res.json();
+      if (d && d.streaming !== undefined) {
+        updateStreamingUI(d.streaming);
+      }
+    }
+  } catch (err) {
+    console.warn('[STREAM] HTTP stream toggle failed:', err);
+  }
+
+  // Also send duplex WebSocket command if connected
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(next ? 'stream start' : 'stream stop');
+  }
+
+  appendTerminalOutput(`[SYSTEM] Wi-Fi streaming ${next ? 'START requested' : 'STOP requested'}.`);
+}
+
+async function sendPowerAction(action) {
+  try {
+    const res = await fetch(`/api/power?action=${action}`, { method: 'POST' });
+    if (!res.ok) return;
+    const d = await res.json();
+    if (d.standby !== undefined) {
+      updateStandbyUI(d.standby);
+      appendTerminalOutput(d.standby ? '[SYSTEM] Camera entered Standby mode (~35 mA).' : '[SYSTEM] Camera awakened from Standby mode.');
+    }
+    if (action === 'deepsleep' || action === 'shutdown') {
+      appendTerminalOutput('[SYSTEM] Camera entering Deep Sleep (~10 uA). Wi-Fi turning off.');
+      const powerModal = document.getElementById('powerModal');
+      if (powerModal) powerModal.style.display = 'none';
+
+      const standbyAlert = document.getElementById('standbyAlert');
+      if (standbyAlert) {
+        standbyAlert.style.display = 'flex';
+        const title = standbyAlert.querySelector('.alert-title');
+        const sub = standbyAlert.querySelector('.alert-sub');
+        const wakeBtn = document.getElementById('btnOverlayWake');
+        if (title) title.innerText = 'CAMERA SHUT DOWN';
+        if (sub) sub.innerText = 'Camera is in Deep Sleep mode (~10 µA). Click the physical knob to power on.';
+        if (wakeBtn) wakeBtn.style.display = 'none';
+      }
+    }
+  } catch (err) {
+    console.error('Power action failed:', err);
+  }
+}
+
+// Wire up Stream buttons
+if (btnStreamToggle) {
+  btnStreamToggle.addEventListener('click', () => {
+    toggleWiFiStream();
+  });
+}
+
+if (btnOverlayStartStream) {
+  btnOverlayStartStream.addEventListener('click', () => {
+    toggleWiFiStream(true);
+  });
+}
+
+// Wire up Power buttons
+const btnStandby = document.getElementById('btnStandby');
+if (btnStandby) {
+  btnStandby.addEventListener('click', () => {
+    sendPowerAction(isStandby ? 'wake' : 'standby');
+  });
+}
+
+const btnOverlayWake = document.getElementById('btnOverlayWake');
+if (btnOverlayWake) {
+  btnOverlayWake.addEventListener('click', () => {
+    sendPowerAction('wake');
+  });
+}
+
+const btnPowerOff = document.getElementById('btnPowerOff');
+const powerModal = document.getElementById('powerModal');
+const btnPowerModalClose = document.getElementById('btnPowerModalClose');
+const btnCancelPower = document.getElementById('btnCancelPower');
+const btnConfirmPower = document.getElementById('btnConfirmPower');
+
+if (btnPowerOff && powerModal) {
+  btnPowerOff.addEventListener('click', () => {
+    powerModal.style.display = 'flex';
+  });
+}
+if (btnPowerModalClose && powerModal) {
+  btnPowerModalClose.addEventListener('click', () => {
+    powerModal.style.display = 'none';
+  });
+}
+if (btnCancelPower && powerModal) {
+  btnCancelPower.addEventListener('click', () => {
+    powerModal.style.display = 'none';
+  });
+}
+if (btnConfirmPower) {
+  btnConfirmPower.addEventListener('click', () => {
+    sendPowerAction('deepsleep');
+  });
+}
+
 // --- Periodic Telemetry Polling ---
 async function updateStatus() {
   try {
@@ -1099,12 +1315,18 @@ async function updateStatus() {
     const d = await res.json();
     document.getElementById('statBatt').innerText = d.battery + '%';
     document.getElementById('statVolt').innerText = d.voltage.toFixed(3) + ' V';
-    document.getElementById('statPwr').innerText = d.pwrState;
+    document.getElementById('statPwr').innerText = d.standby ? 'STANDBY' : d.pwrState;
     document.getElementById('statClients').innerText = d.clients;
     document.getElementById('statHeap').innerText = Math.round(d.freeHeap / 1024) + ' KB';
     document.getElementById('statPsram').innerText = Math.round(d.freePsram / 1024) + ' KB';
     document.getElementById('statUptime').innerText = d.uptime + ' s';
 
+    if (d.streaming !== undefined) {
+      updateStreamingUI(d.streaming);
+    }
+    if (d.standby !== undefined) {
+      updateStandbyUI(d.standby);
+    }
     if (d.rangeMode !== undefined) {
       updateRangeModeUI(d.rangeMode, d.manualMin, d.manualMax);
     }
@@ -1119,6 +1341,7 @@ async function updateStatus() {
 
 // --- Initialization ---
 updateDimensions();
+updateStreamingUI(false);
 connectWebSocket();
 loadInitialLogs();
 setInterval(updateStatus, 1000);

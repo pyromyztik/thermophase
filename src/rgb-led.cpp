@@ -1,4 +1,5 @@
 #include "rgb-led.hpp"
+#include "power.hpp"
 
 // Initialize NeoPixel strip
 Adafruit_NeoPixel onboardLED(NUM_PIXELS, RGB_PIN, NEO_GRB + NEO_KHZ800);
@@ -7,6 +8,16 @@ void initRGB() {
     onboardLED.begin();
     onboardLED.setBrightness(LED_BRIGHTNESS);
     onboardLED.show(); // Clear to off
+}
+
+void turnOffRGB() {
+    onboardLED.clear();
+    onboardLED.setPixelColor(0, 0);
+    onboardLED.show();
+    delay(5);
+    onboardLED.clear();
+    onboardLED.setPixelColor(0, 0);
+    onboardLED.show();
 }
 
 #include "sensor.hpp"
@@ -20,6 +31,12 @@ void ledAnimationTask(void *pvParameters) {
     int8_t pulseDir = 3;
 
     while (true) {
+        if (isCameraStandby()) {
+            turnOffRGB();
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
         bool displayErr = (globalDeviceStatus != STATUS_OK);
         bool sensorErr = (globalSensorStatus != SENSOR_OK);
 

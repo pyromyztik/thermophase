@@ -8,5 +8,6 @@ extern Adafruit_NeoPixel onboardLED;
 
 // Function prototypes
 void initRGB();
+void turnOffRGB();
 void ledAnimationTask(void *pvParameters);
 

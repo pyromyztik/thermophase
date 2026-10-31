@@ -5,6 +5,8 @@
 #include "ui.hpp"
 #include "diagnostics.hpp"
 #include "ble.hpp"
+#include "power.hpp"
+#include "wifi.hpp"
 
 extern TaskHandle_t diagTaskHandle;
 
@@ -72,6 +74,32 @@ void handleSerialCommand(const String& cmd) {
     } else if (cmd.equalsIgnoreCase("ppt_send") || cmd.equalsIgnoreCase("ppt_transfer")) {
         outPrintln("\n[CMD] Manual PPT Spectral Phasegram BLE Transfer Triggered");
         triggerPPTBLETransfer();
+    } else if (cmd.equalsIgnoreCase("standby")) {
+        setCameraStandby(true);
+        outPrintln("[PWR] Standby mode activated (~35 mA).");
+    } else if (cmd.equalsIgnoreCase("wake")) {
+        setCameraStandby(false);
+        outPrintln("[PWR] Standby mode deactivated (screen & sensor restored).");
+    } else if (cmd.equalsIgnoreCase("sleep") || cmd.equalsIgnoreCase("poweroff") || cmd.equalsIgnoreCase("shutdown")) {
+        outPrintln("[PWR] Powering off system to Deep Sleep (~10 uA)...");
+        vTaskDelay(pdMS_TO_TICKS(100));
+        enterDeepSleep();
+    } else if (cmd.equalsIgnoreCase("stream start") || cmd.equalsIgnoreCase("stream on")) {
+        if (isCameraStandby()) setCameraStandby(false);
+        setWiFiStreamingActive(true);
+        requestUINavToWiFiStream();
+        outPrintln("[WIFI] Wi-Fi thermal streaming started.");
+    } else if (cmd.equalsIgnoreCase("stream stop") || cmd.equalsIgnoreCase("stream off")) {
+        setWiFiStreamingActive(false);
+        requestUINavFromWiFiStream();
+        outPrintln("[WIFI] Wi-Fi thermal streaming stopped.");
+    } else if (cmd.equalsIgnoreCase("stream") || cmd.equalsIgnoreCase("stream toggle")) {
+        bool next = !isWiFiStreamingActive();
+        if (next && isCameraStandby()) setCameraStandby(false);
+        setWiFiStreamingActive(next);
+        if (next) requestUINavToWiFiStream();
+        else requestUINavFromWiFiStream();
+        outPrintf("[WIFI] Wi-Fi thermal streaming %s.\n", next ? "started" : "stopped");
     } else if (cmd.equalsIgnoreCase("help") || cmd.equalsIgnoreCase("?")) {
         outPrintln("\n================ Serial Controls & Commands ================");
         outPrintln("  [Keyboard Controls]");
@@ -85,6 +113,9 @@ void handleSerialCommand(const String& cmd) {
         outPrintln("    'c' / 'click'       : Click");
         outPrintln("    'h' / 'hold'        : Long press / hold");
         outPrintln("  [System Commands]");
+        outPrintln("    'standby'           : Enter low-power standby (screen & sensor sleep, Wi-Fi stays on)");
+        outPrintln("    'wake'              : Wake camera from standby");
+        outPrintln("    'poweroff' / 'sleep': Turn off camera completely into Deep Sleep (~10 uA)");
         outPrintln("    'brightness'        : Query current display brightness");
         outPrintln("    'brightness <10-100>': Set display brightness percentage");
         outPrintln("    'compute' / 'perf'  : Print real-time CPU compute & headroom audit");

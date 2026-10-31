@@ -11,6 +11,7 @@
 // MLX90640 I2C Pins (as in MLX90640 Test)
 #define PIN_I2C_SDA       16
 #define PIN_I2C_SCL       17
+#define PIN_MLX_PWR       18  // High-Side GPIO Power Control (cut power in standby & deep sleep)
 #define I2C_FREQ_INIT     400000
 #define I2C_SPEED_400K    400000
 #define I2C_SPEED_800K    800000

@@ -170,6 +170,8 @@ void uiDismissSensorError();
 void uiNavToPPT();
 bool isPPTArmedCooldown();
 void uiNavToWiFiStream();
+void requestUINavToWiFiStream();
+void requestUINavFromWiFiStream();
 
 // Thermal Range Knob Gesture Progress Bar Overlay
 void showThermalRangeProgressBar(int currentTicks, int maxTicks);

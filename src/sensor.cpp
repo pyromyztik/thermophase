@@ -1,4 +1,5 @@
 #include "sensor.hpp"
+#include "power.hpp"
 #include "diagnostics.hpp"
 #include "ppt.hpp"
 #include "ble.hpp"
@@ -84,10 +85,83 @@ static void scanI2CBus() {
     Serial.println("--------------------------------------------------\n");
 }
 
+void powerOffSensor() {
+    Serial.println("[MLX90640] Shutting down thermal sensor...");
+    // 1. Put MLX90640 into sleep mode if possible
+    if (globalSensorStatus == SENSOR_OK) {
+        Wire.beginTransmission(MLX90640_I2CADDR_DEFAULT);
+        Wire.write(0x80);
+        Wire.write(0x0D);
+        if (Wire.endTransmission(false) == 0 && Wire.requestFrom((uint8_t)MLX90640_I2CADDR_DEFAULT, (uint8_t)2) == 2) {
+            uint16_t ctrlReg = (Wire.read() << 8) | Wire.read();
+            ctrlReg |= (1 << 7); // Set Sleep bit
+            Wire.beginTransmission(MLX90640_I2CADDR_DEFAULT);
+            Wire.write(0x80);
+            Wire.write(0x0D);
+            Wire.write((uint8_t)(ctrlReg >> 8));
+            Wire.write((uint8_t)(ctrlReg & 0xFF));
+            Wire.endTransmission();
+        }
+    }
+
+    #if (defined(PIN_MLX_PWR) && PIN_MLX_PWR >= 0)
+    // 2. Shut down I2C bus and drive SDA/SCL LOW so there is ZERO parasitic back-feeding through ESD diodes
+    Wire.end();
+    pinMode(PIN_I2C_SDA, OUTPUT);
+    digitalWrite(PIN_I2C_SDA, LOW);
+    pinMode(PIN_I2C_SCL, OUTPUT);
+    digitalWrite(PIN_I2C_SCL, LOW);
+
+    // 3. Drive power pin LOW
+    pinMode(PIN_MLX_PWR, OUTPUT);
+    digitalWrite(PIN_MLX_PWR, LOW);
+    Serial.printf("[MLX90640] Power cut via GPIO %d (Sensor & Blue LED OFF, 0.00V).\n", PIN_MLX_PWR);
+    #endif
+
+    globalSensorStatus = SENSOR_DISCONNECTED;
+}
+
+void powerOnSensor() {
+    #if (defined(PIN_MLX_PWR) && PIN_MLX_PWR >= 0)
+    Serial.printf("[MLX90640] Powering up sensor via GPIO %d...\n", PIN_MLX_PWR);
+    pinMode(PIN_MLX_PWR, OUTPUT);
+    gpio_set_drive_capability((gpio_num_t)PIN_MLX_PWR, GPIO_DRIVE_CAP_3);
+    digitalWrite(PIN_MLX_PWR, HIGH);
+    delay(40);
+    #endif
+
+    Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+    Wire.setClock(I2C_FREQ_INIT);
+
+    if (mlx.begin(MLX90640_I2CADDR_DEFAULT, &Wire)) {
+        Wire.setClock(currentSensorI2CSpeed);
+        mlx.setMode(MLX90640_CHESS);
+        mlx.setResolution(MLX90640_ADC_18BIT);
+        if (currentSensorI2CSpeed <= I2C_SPEED_400K && THERMAL_REFRESH_RATE > MLX90640_16_HZ) {
+            mlx.setRefreshRate(MLX90640_16_HZ);
+        } else {
+            mlx.setRefreshRate(THERMAL_REFRESH_RATE);
+        }
+        globalSensorStatus = SENSOR_OK;
+        sensorReconnectAttempts = 0;
+        Serial.println("[MLX90640] Sensor successfully re-initialized and ready!");
+    } else {
+        Serial.println("[MLX90640] Warning: Sensor did not respond on initial power-on probe.");
+    }
+}
+
 bool initThermalSensor() {
     if (frameMutex == NULL) {
         frameMutex = xSemaphoreCreateMutex();
     }
+
+    #if (defined(PIN_MLX_PWR) && PIN_MLX_PWR >= 0)
+    Serial.printf("[MLX90640] Powering sensor via GPIO %d (High-Side Power Switch)...\n", PIN_MLX_PWR);
+    pinMode(PIN_MLX_PWR, OUTPUT);
+    gpio_set_drive_capability((gpio_num_t)PIN_MLX_PWR, GPIO_DRIVE_CAP_3);
+    digitalWrite(PIN_MLX_PWR, HIGH);
+    delay(40); // Power rail stabilization and internal POR
+    #endif
 
     Serial.println("[MLX90640] Initializing I2C bus...");
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
@@ -371,6 +445,11 @@ void thermalSensorTask(void *pvParameters) {
     static bool centerInitialized = false;
 
     while (true) {
+        if (isCameraStandby()) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
         // Handle disconnected state: attempt periodic auto-reconnection
         if (globalSensorStatus != SENSOR_OK) {
             sensorReconnectAttempts++;

@@ -370,6 +370,9 @@ void powerWakeInit() {
     // Release any pin holds from sleep mode
     gpio_hold_dis((gpio_num_t)RGB_PIN);
     gpio_hold_dis((gpio_num_t)TFT_LED);
+    #if (defined(PIN_MLX_PWR) && PIN_MLX_PWR >= 0)
+    gpio_hold_dis((gpio_num_t)PIN_MLX_PWR);
+    #endif
 
     // Immediately drive TFT backlight LOW to prevent white flash
     pinMode(TFT_LED, OUTPUT);
@@ -386,7 +389,7 @@ void enterDeepSleep() {
     saveSettingsIfDirty();
 
     Serial.println("\n[PWR] Entering Deep Sleep mode (~10 uA)...");
-    Serial.println("[PWR] Powering off display backlight, LCD panel, and RGB LED.");
+    Serial.println("[PWR] Powering off display backlight, LCD panel, MLX sensor, and RGB LED.");
     Serial.println("[PWR] Click the HW-040 rotary knob to power on.\n");
     Serial.flush();
 
@@ -408,20 +411,17 @@ void enterDeepSleep() {
         diagTaskHandle = NULL;
     }
 
-    // 2. Extinguish on-board NeoPixel RGB LED and latch the 0 value
-    onboardLED.clear();
-    onboardLED.setPixelColor(0, 0);
-    onboardLED.show();
-    delay(20);
-    onboardLED.clear();
-    onboardLED.setPixelColor(0, 0);
-    onboardLED.show();
-    delay(20);
-
-    // 3. Drive NeoPixel pin LOW and lock it during sleep to prevent floating voltage
+    // 2. Extinguish on-board NeoPixel RGB LED and latch pin LOW
+    turnOffRGB();
     pinMode(RGB_PIN, OUTPUT);
     digitalWrite(RGB_PIN, LOW);
     gpio_hold_en((gpio_num_t)RGB_PIN);
+
+    // 3. Cut power to MLX90640 sensor and blue LED, latch pin LOW
+    #if (defined(PIN_MLX_PWR) && PIN_MLX_PWR >= 0)
+    powerOffSensor();
+    gpio_hold_en((gpio_num_t)PIN_MLX_PWR);
+    #endif
 
     // 4. Turn off TFT backlight pin immediately and lock it
     ledcWrite(TFT_LED_PWM_CHANNEL, 0);
@@ -451,3 +451,64 @@ void enterDeepSleep() {
     // 9. Enter Deep Sleep
     esp_deep_sleep_start();
 }
+
+static bool s_cameraStandby = false;
+
+bool isCameraStandby() {
+    return s_cameraStandby;
+}
+
+void setCameraStandby(bool standby) {
+    if (s_cameraStandby == standby) {
+        return;
+    }
+    s_cameraStandby = standby;
+
+    if (standby) {
+        saveSettingsIfDirty();
+        Serial.println("\n[PWR] Entering Standby mode (screen off, sensor halted, Wi-Fi alive)...");
+
+        // 1. Turn off TFT backlight PWM
+        ledcWrite(TFT_LED_PWM_CHANNEL, 0);
+
+        // 2. Put ILI9341 display controller into hardware sleep
+        tft.sendCommand(ILI9341_SLPIN);
+
+        // 3. Extinguish onboard NeoPixel
+        turnOffRGB();
+
+        // 4. Cut power to MLX90640 thermal sensor & blue LED
+        powerOffSensor();
+
+        Serial.println("[PWR] Standby active (~35 mA). Send Wake command from Web or click HW-040 knob.\n");
+    } else {
+        Serial.println("\n[PWR] Exiting Standby mode (restoring display & sensor)...");
+
+        // 1. Wake ILI9341 display controller
+        tft.sendCommand(ILI9341_SLPOUT);
+        delay(60); // Charge pump stabilization delay
+
+        // 2. Restore display backlight
+        setDisplayBrightness(getDisplayBrightness());
+
+        // 3. Restore power to MLX90640 thermal sensor
+        powerOnSensor();
+
+        // 4. Invalidate active screen so LVGL redraws cleanly
+        if (lv_disp_get_default() != nullptr && lv_scr_act() != nullptr) {
+            lv_obj_invalidate(lv_scr_act());
+        }
+
+        // 5. Notify display task if waiting
+        if (displayTaskHandle != NULL) {
+            xTaskNotifyGive(displayTaskHandle);
+        }
+
+        Serial.println("[PWR] System awakened from Standby mode!\n");
+    }
+}
+
+void toggleCameraStandby() {
+    setCameraStandby(!s_cameraStandby);
+}
+

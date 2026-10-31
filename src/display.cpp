@@ -289,6 +289,20 @@ static WheelEventType s_lastRotDir = WHEEL_EVENT_NONE;
 // Deferred UI navigation target requested from input callbacks
 static volatile AppState s_pendingNavState = (AppState)-1;
 
+void requestUINavToWiFiStream() {
+    s_pendingNavState = APP_STATE_WIFI_STREAM;
+    if (displayTaskHandle != nullptr) {
+        xTaskNotifyGive(displayTaskHandle);
+    }
+}
+
+void requestUINavFromWiFiStream() {
+    s_pendingNavState = APP_STATE_MAIN_MENU;
+    if (displayTaskHandle != nullptr) {
+        xTaskNotifyGive(displayTaskHandle);
+    }
+}
+
 // LVGL Rotary Wheel Input Callback
 static void wheel_read_cb(lv_indev_drv_t* drv, lv_indev_data_t* data) {
     static int32_t last_diff = 0;
@@ -568,6 +582,20 @@ void displayTask(void *pvParameters) {
     uiNavToThermal();
 
     while (true) {
+        if (isCameraStandby()) {
+            WheelEventType evt;
+            while (getWheelEvent(evt, 0)) {
+                if (evt == WHEEL_EVENT_CLICK || evt == WHEEL_EVENT_LONG_PRESS) {
+                    Serial.println("[PWR] Knob click detected: Waking camera from Standby!");
+                    setCameraStandby(false);
+                    break;
+                }
+                // Rotary knob rotation is ignored in standby until clicked
+            }
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
         uint32_t now = millis();
 
         // Handle deferred UI navigation safely outside of LVGL timer & indev callback context
@@ -586,6 +614,11 @@ void displayTask(void *pvParameters) {
                 uiNavToThermalRange(APP_STATE_THERMAL_VIEW);
             } else if (target == APP_STATE_PPT_ARMED) {
                 uiNavToPPT();
+            } else if (target == APP_STATE_WIFI_STREAM) {
+                if (uiIsFullscreen()) {
+                    uiExitFullscreen();
+                }
+                uiNavToWiFiStream();
             }
         }
 

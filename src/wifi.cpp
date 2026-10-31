@@ -124,14 +124,15 @@ static void handleStatus() {
     const char* stateStr = (bState == BATTERY_CHARGING) ? "CHARGING" :
                            (bState == BATTERY_DISCHARGING) ? "DISCHARGING" : "DISCONNECTED";
 
-    char json[640];
+    char json[750];
     snprintf(json, sizeof(json),
         "{\"spotTemp\":%.1f,\"minTemp\":%.1f,\"maxTemp\":%.1f,\"fps\":%.1f,"
         "\"scaling\":\"%s\",\"palette\":\"%s\",\"paletteId\":%u,\"unit\":\"%s\","
         "\"emissivity\":%.2f,\"emissivityPreset\":\"%s\",\"txPower\":%.1f,"
         "\"rangeMode\":%u,\"manualMin\":%.1f,\"manualMax\":%.1f,"
         "\"battery\":%u,\"voltage\":%.3f,\"pwrState\":\"%s\","
-        "\"clients\":%u,\"wsClients\":%lu,\"freeHeap\":%u,\"freePsram\":%u,\"uptime\":%lu}",
+        "\"clients\":%u,\"wsClients\":%lu,\"freeHeap\":%u,\"freePsram\":%u,\"uptime\":%lu,"
+        "\"standby\":%s,\"streaming\":%s}",
         displayCenterTemp, displayMinTemp, displayMaxTemp, displayFps,
         getScalingModeShortName(getScalingModeSetting()),
         getPaletteName(getPaletteSetting()),
@@ -146,15 +147,101 @@ static void handleStatus() {
         getBatteryPercentage(), getBatteryVoltage(), stateStr,
         (s_wifiEnabled && WiFi.getMode() == WIFI_AP) ? s_connectedStations : 0,
         (unsigned long)s_wsClientCount,
-        ESP.getFreeHeap(), ESP.getFreePsram(), (unsigned long)(millis() / 1000)
+        ESP.getFreeHeap(), ESP.getFreePsram(), (unsigned long)(millis() / 1000),
+        isCameraStandby() ? "true" : "false",
+        isWiFiStreamingActive() ? "true" : "false"
     );
     s_server->send(200, "application/json", json);
+}
+
+static void handleStream() {
+    if (!s_server) return;
+
+    if (s_server->hasArg("action")) {
+        String act = s_server->arg("action");
+        if (act.equalsIgnoreCase("start") || act.equalsIgnoreCase("on") || act.equalsIgnoreCase("1")) {
+            if (isCameraStandby()) {
+                setCameraStandby(false);
+            }
+            setWiFiStreamingActive(true);
+            requestUINavToWiFiStream();
+        } else if (act.equalsIgnoreCase("stop") || act.equalsIgnoreCase("off") || act.equalsIgnoreCase("0")) {
+            setWiFiStreamingActive(false);
+            requestUINavFromWiFiStream();
+        } else if (act.equalsIgnoreCase("toggle")) {
+            bool next = !isWiFiStreamingActive();
+            if (next && isCameraStandby()) {
+                setCameraStandby(false);
+            }
+            setWiFiStreamingActive(next);
+            if (next) requestUINavToWiFiStream();
+            else requestUINavFromWiFiStream();
+        }
+    } else if (s_server->hasArg("active")) {
+        bool act = s_server->arg("active").equalsIgnoreCase("true") || s_server->arg("active") == "1";
+        if (act && isCameraStandby()) {
+            setCameraStandby(false);
+        }
+        setWiFiStreamingActive(act);
+        if (act) requestUINavToWiFiStream();
+        else requestUINavFromWiFiStream();
+    }
+
+    char resp[64];
+    snprintf(resp, sizeof(resp), "{\"status\":\"ok\",\"streaming\":%s}", isWiFiStreamingActive() ? "true" : "false");
+    s_server->send(200, "application/json", resp);
+}
+
+static void handlePower() {
+    if (!s_server) return;
+
+    if (s_server->hasArg("action")) {
+        String act = s_server->arg("action");
+        if (act.equalsIgnoreCase("standby")) {
+            setCameraStandby(true);
+            s_server->send(200, "application/json", "{\"status\":\"ok\",\"standby\":true}");
+            return;
+        } else if (act.equalsIgnoreCase("wake")) {
+            setCameraStandby(false);
+            s_server->send(200, "application/json", "{\"status\":\"ok\",\"standby\":false}");
+            return;
+        } else if (act.equalsIgnoreCase("toggle")) {
+            toggleCameraStandby();
+            char resp[64];
+            snprintf(resp, sizeof(resp), "{\"status\":\"ok\",\"standby\":%s}", isCameraStandby() ? "true" : "false");
+            s_server->send(200, "application/json", resp);
+            return;
+        } else if (act.equalsIgnoreCase("deepsleep") || act.equalsIgnoreCase("shutdown") || act.equalsIgnoreCase("off")) {
+            s_server->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Entering Deep Sleep (~10 uA). Click knob to wake.\"}");
+            vTaskDelay(pdMS_TO_TICKS(300));
+            enterDeepSleep();
+            return;
+        }
+    }
+
+    char resp[128];
+    snprintf(resp, sizeof(resp),
+        "{\"standby\":%s,\"battery\":%u,\"voltage\":%.3f}",
+        isCameraStandby() ? "true" : "false",
+        getBatteryPercentage(),
+        getBatteryVoltage()
+    );
+    s_server->send(200, "application/json", resp);
 }
 
 static void handleControl() {
     if (!s_server) return;
     bool changed = false;
 
+    if (s_server->hasArg("stream")) {
+        String st = s_server->arg("stream");
+        bool start = (st == "1" || st.equalsIgnoreCase("true") || st.equalsIgnoreCase("start") || st.equalsIgnoreCase("on"));
+        if (start && isCameraStandby()) setCameraStandby(false);
+        setWiFiStreamingActive(start);
+        if (start) requestUINavToWiFiStream();
+        else requestUINavFromWiFiStream();
+        changed = true;
+    }
     if (s_server->hasArg("rangeMode")) {
         int rm = s_server->arg("rangeMode").toInt();
         setThermalRangeModeSetting(rm == 1 ? THERMAL_RANGE_MANUAL : THERMAL_RANGE_AUTO);
@@ -458,7 +545,9 @@ void setWiFiStreamingEnabled(bool enabled) {
             s_server->on("/", HTTP_GET, handleRoot);
             s_server->on("/index.html", HTTP_GET, handleRoot);
             s_server->on("/api/status", HTTP_GET, handleStatus);
+            s_server->on("/api/stream", HTTP_ANY, handleStream);
             s_server->on("/api/control", HTTP_ANY, handleControl);
+            s_server->on("/api/power", HTTP_ANY, handlePower);
             s_server->on("/api/logs", HTTP_GET, handleLogs);
             s_server->on("/generate_204", HTTP_GET, [](){ if (s_server) s_server->send(204, "text/plain", ""); });
             s_server->on("/gen_204", HTTP_GET, [](){ if (s_server) s_server->send(204, "text/plain", ""); });

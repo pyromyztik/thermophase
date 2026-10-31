@@ -53,3 +53,9 @@ void enterDeepSleep();
 
 // Initializes power/wake state on boot (de-inits RTC GPIO if woken from deep sleep)
 void powerWakeInit();
+
+// Standby state management (low-power screen, sensor & rendering sleep while keeping Wi-Fi active)
+bool isCameraStandby();
+void setCameraStandby(bool standby);
+void toggleCameraStandby();
+
