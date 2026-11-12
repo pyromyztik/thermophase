@@ -378,7 +378,8 @@ void updatePPTScreenArmed(
 
     lv_label_set_text(ppt_lbl_f2_title, "RISE dT");
     char buf[32];
-    snprintf(buf, sizeof(buf), "+%.1f %s", currentDt, UI_SYMBOL_DEGREE "C");
+    float displayDt = (std::isfinite(currentDt) && currentDt > 0.0f) ? currentDt : 0.0f;
+    snprintf(buf, sizeof(buf), "+%.1f %s", displayDt, UI_SYMBOL_DEGREE "C");
     lv_label_set_text(ppt_lbl_f2_val, buf);
 
     lv_label_set_text(ppt_lbl_f3_title, "ACTION");

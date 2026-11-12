@@ -103,6 +103,9 @@ bool initPPT() {
     if (ringBuffer) {
         memset(ringBuffer, 0, sizeof(int16_t) * PPT_RING_FRAMES * PPT_PIXELS);
     }
+    if (prevTemps) {
+        memset(prevTemps, 0, sizeof(float) * PPT_PIXELS);
+    }
     ringHead = 0;
     ringCount = 0;
     currentPPTMode = PPT_MODE_IDLE;
@@ -131,6 +134,9 @@ void pptArm() {
     currentDt = 0.0f;
     manualTriggerFlag = false;
     hasPrevTemps = false;
+    if (prevTemps) {
+        memset(prevTemps, 0, sizeof(float) * PPT_PIXELS);
+    }
     currentPPTMode = PPT_MODE_ARMED;
     Serial.println("[PPT] >>> PPT STATE: ARMED (Look-Around Mode: Live preview, click knob to record) <<<");
 }
@@ -139,6 +145,8 @@ void pptDisarm() {
     currentPPTMode = PPT_MODE_IDLE;
     manualTriggerFlag = false;
     acquiredFrames = 0;
+    currentDt = 0.0f;
+    hasPrevTemps = false;
     Serial.println("[PPT] PPT Disarmed (returned to Live Preview)");
 }
 
@@ -191,13 +199,13 @@ void pptProcessSensorFrame(const float* currentTemps) {
         if (hasPrevTemps) {
             for (int i = 0; i < PPT_PIXELS; ++i) {
                 float diff = currentTemps[i] - prevTemps[i];
-                if (diff > maxRise) {
+                if (std::isfinite(diff) && diff > maxRise) {
                     maxRise = diff;
                 }
             }
             currentDt = maxRise;
         }
-        memcpy(prevTemps, currentTemps, sizeof(prevTemps));
+        memcpy(prevTemps, currentTemps, sizeof(float) * PPT_PIXELS);
         hasPrevTemps = true;
 
         // Store into the rolling 8-frame ring buffer (maintains pre-trigger baseline)
